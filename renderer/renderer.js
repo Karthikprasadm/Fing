@@ -539,7 +539,7 @@
   const sendBtn = document.getElementById('send-btn');
   if (sendBtn) {
     const forceKey = isWindows ? 'Ctrl+Shift+A' : '⌘⇧A';
-    sendBtn.title = `Send · ${forceKey} to force answer`;
+    // sendBtn.title = `Send · ${forceKey} to force answer`;
   }
 
   // Smart toggle
@@ -776,7 +776,7 @@
       speaking:     'Speech detected',
       transcribing: 'Transcribing…'
     };
-    dot.title = labels[dotState] || '';
+    // dot.title = labels[dotState] || '';
   }
 
   let sttState = 'disconnected';
@@ -1176,9 +1176,9 @@
       const loaded = fields[el.dataset.field];
       el.classList.toggle('loaded', loaded);
       el.classList.toggle('missing', !loaded);
-      el.title = loaded
-        ? el.textContent.trim() + ' loaded'
-        : el.textContent.trim() + ' not set — add in Settings';
+      // el.title = loaded
+      //   ? el.textContent.trim() + ' loaded'
+      //   : el.textContent.trim() + ' not set — add in Settings';
     });
   }
 
@@ -1188,7 +1188,7 @@
     const fast = m.fast || 'fast model';
     const smart = m.smart || 'smart model';
     const btn = document.getElementById('smart-toggle');
-    if (btn) btn.title = 'Fast: ' + fast + ' · Smart: ' + smart + ' (higher quality, ~2× slower)';
+    // if (btn) btn.title = 'Fast: ' + fast + ' · Smart: ' + smart + ' (higher quality, ~2× slower)';
   }
 
   // ---- microphone permission banner --------------------------------------
@@ -1389,7 +1389,7 @@
       row.className = 's-caller';
       const label = document.createElement('span');
       label.textContent = name + ' — ' + (allowed.length ? allowed.join(' + ') : 'denied');
-      label.title = id;
+      // label.title = id;
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = 'Forget';
@@ -1505,7 +1505,7 @@
       runtimeBadge.textContent = whisperOverview.runtime.available
         ? `Ready · v${whisperOverview.runtime.version} · ${whisperOverview.runtime.target}`
         : 'Not prepared';
-      runtimeBadge.title = whisperOverview.runtime.message || '';
+      // runtimeBadge.title = whisperOverview.runtime.message || '';
 
       const select = $('#whisper-model');
       select.innerHTML = '';
