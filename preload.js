@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('cue', {
   micPcm: (arrayBuffer) => ipcRenderer.send('mic:pcm', arrayBuffer),
   systemPcm: (arrayBuffer) => ipcRenderer.send('system:pcm', arrayBuffer),
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
+  setFocusable: (v) => ipcRenderer.send('win:focusable', v),
   clearTranscript: () => ipcRenderer.invoke('transcript:clear'),
   openPane: (url) => ipcRenderer.send('open-pane', url),
   appLinkState: () => ipcRenderer.invoke('applink:state'),

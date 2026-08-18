@@ -215,6 +215,7 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
+    focusable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -636,6 +637,7 @@ ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio(
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('app:quit', () => app.quit());
+ipcMain.on('win:focusable', (_e, v) => { if (win) win.setFocusable(!!v); });
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
