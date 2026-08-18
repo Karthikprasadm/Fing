@@ -10,23 +10,23 @@
   <div id="app">
     <!-- Dedicated drag handle / top bar -->
     <div id="toolbar" class="drag-handle">
-      <div class="drag-pill" title="Drag to move window">
+      <div class="drag-pill">
         <span class="drag-dots" aria-hidden="true"></span>
         <span class="drag-label">Drag</span>
       </div>
-      <button class="tb-logo" id="logo-btn" title="cue"></button>
+      <button class="tb-logo" id="logo-btn"></button>
       <div class="tb-divider"></div>
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
       <div class="tb-divider"></div>
-      <button class="tb-stop" id="stop-btn" title="Start / stop listening"></button>
+      <button class="tb-stop" id="stop-btn"></button>
       <div class="tb-divider"></div>
-      <button class="tb-quit" id="quit-btn" title="Quit cue (⌘⇧X)"></button>
+      <button class="tb-quit" id="quit-btn"></button>
     </div>
 
     <!-- Main assistant panel -->
     <div id="panel-wrap">
       <span id="live-dot" class="off"></span>
-      <div id="stt-status" class="stt-status stt-disconnected" title="STT connection status">off</div>
+      <div id="stt-status" class="stt-status stt-disconnected">off</div>
       <div id="panel" class="glass no-drag">
 
         <!-- Two-column layout: responses (left) + live transcript sidebar (right) -->
@@ -37,14 +37,12 @@
             <div id="messages"></div>
 
             <div id="action-row">
-              <button class="act act-primary" data-mode="say"
-                title="Suggests what to say next based on the conversation">
+              <button class="act act-primary" data-mode="say">
                 <span class="ic"></span><span>What should I say?</span>
                 <span class="shortcut-hint" id="say-shortcut-hint"></span>
               </button>
               <span class="sep">•</span>
-              <button class="act act-secondary" data-mode="assist"
-                title="Scans your screen and conversation to decide what you need">
+              <button class="act act-secondary" data-mode="assist">
                 <span class="ic"></span><span>Assist</span>
                 <span class="shortcut-hint" id="assist-shortcut-hint"></span>
               </button>
@@ -61,10 +59,10 @@
               </div>
               <div id="composer-bottom">
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
-                <button id="history-btn" class="history-btn" title="View conversation history"><span class="ic"></span></button>
-                <button id="more-btn" class="more-btn" title="Settings"></button>
+                <button id="history-btn" class="history-btn"><span class="ic"></span></button>
+                <button id="more-btn" class="more-btn"></button>
                 <div class="spacer"></div>
-                <button id="send-btn" title="Send"></button>
+                <button id="send-btn"></button>
               </div>
             </div>
 
@@ -84,13 +82,13 @@
     <div id="transcript-sidebar" class="transcript-sidebar hidden">
       <div class="ts-header">
         <span class="ts-title">Conversation History</span>
-        <button class="ts-close-btn" id="close-sidebar-btn" title="Close history">✕</button>
+        <button class="ts-close-btn" id="close-sidebar-btn">✕</button>
       </div>
       <div id="ts-list" class="ts-list">
         <div class="ts-placeholder">Conversation history will appear here when listening.</div>
       </div>
       <div class="ts-footer">
-        <button class="ts-clear-btn" id="clear-transcript-btn" title="Clear all history">Clear History</button>
+        <button class="ts-clear-btn" id="clear-transcript-btn">Clear History</button>
       </div>
     </div>
   </div>
