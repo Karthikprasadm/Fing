@@ -2,10 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const src = fs.readFileSync(path.join(__dirname, 'renderer', 'renderer.js'), 'utf8');
 
-const defPos = src.indexOf('function updateTranscriptInterim');
+const defPos = src.indexOf('function appendTranscriptHistoryTurn');
 const handlerPos = src.indexOf("cue.on('stt:interim'");
 const r1 = defPos !== -1 && handlerPos !== -1 && defPos < handlerPos;
-console.log('1. updateTranscriptInterim defined before stt:interim:', r1);
+console.log('1. appendTranscriptHistoryTurn defined before stt:interim:', r1);
 
 const clearDefPos = src.indexOf('function clearTranscriptInterim');
 const finalHandlerPos = src.indexOf("cue.on('stt:final'");
@@ -23,8 +23,8 @@ const llmStartBlock = src.substring(llmStartIdx, llmTokenIdx);
 const r4 = !llmStartBlock.includes('clearMessages()');
 console.log('4. llm:start does NOT call clearMessages():', r4);
 
-const tabHandlerPos = src.indexOf('saveSettings().catch');
 const tabClickPos = src.indexOf("querySelectorAll('.s-tab').forEach");
+const tabHandlerPos = src.indexOf('saveSettings()', tabClickPos);
 const r5 = tabHandlerPos > 0 && tabHandlerPos > tabClickPos;
 console.log('5. tab handler calls saveSettings:', r5);
 
