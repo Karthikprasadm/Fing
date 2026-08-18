@@ -958,3 +958,31 @@ button:hover, .act:hover, .smart-pill:hover, .more-btn:hover, #send-btn:hover, #
 button:active, .act:active, .smart-pill:active, .more-btn:active, #send-btn:active, #clear-transcript-btn:active, .ob-buttons button:active {
   transform: translateY(1px) scale(0.97);
 }
+
+/* Custom Confirm Modal */
+.confirm-modal {
+  position: fixed; inset: 0; z-index: 1000;
+  display: grid; place-items: center;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(8px);
+}
+.confirm-modal.hidden { display: none !important; }
+.confirm-modal-content {
+  width: min(340px, 90vw);
+  padding: 20px;
+  background: rgba(20, 22, 30, 0.95);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--r-12);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  text-align: center;
+}
+.confirm-modal-text {
+  font-size: 14px;
+  color: var(--tx-1);
+  margin-bottom: 18px;
+  line-height: 1.5;
+}
+.confirm-modal-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}

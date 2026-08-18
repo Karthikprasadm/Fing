@@ -1575,7 +1575,7 @@
 
   $('#whisper-delete').addEventListener('click', async () => {
     const model = getSelectedWhisperModel();
-    if (!model || !window.confirm(`Delete the ${model.id} model (${formatBytes(model.bytes)}) from this computer?`)) return;
+    if (!model || !(await window.customConfirm(`Delete the ${model.id} model (${formatBytes(model.bytes)}) from this computer?`))) return;
     try {
       await cue.whisperModelDelete(model.id);
       $('#whisper-status').textContent = `${model.id} deleted.`;
@@ -1819,6 +1819,41 @@
     if (isWindows) {
       placeholder.innerHTML = 'Ask about your screen or conversation, or <span class="keycap">Ctrl</span><span class="keycap">⏎</span> for Assist';
     }
+
+    // Prevent any native context menu from opening (prevents screen share leakage of right-click menu)
+    window.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+    }, false);
+
+    // Prevent default drag and drop behavior across the window (prevents file hijacking navigation)
+    window.addEventListener('dragover', (e) => e.preventDefault(), false);
+    window.addEventListener('drop', (e) => e.preventDefault(), false);
+
+    // Custom HTML confirm wrapper
+    window.customConfirm = function(message) {
+      return new Promise((resolve) => {
+        const modal = document.getElementById('confirm-modal');
+        const text = document.getElementById('confirm-modal-text');
+        const yesBtn = document.getElementById('confirm-modal-yes');
+        const noBtn = document.getElementById('confirm-modal-no');
+        if (!modal || !text || !yesBtn || !noBtn) {
+          resolve(false);
+          return;
+        }
+        text.textContent = message;
+        modal.classList.remove('hidden');
+        
+        const cleanup = (val) => {
+          modal.classList.add('hidden');
+          yesBtn.onclick = null;
+          noBtn.onclick = null;
+          resolve(val);
+        };
+        
+        yesBtn.onclick = () => cleanup(true);
+        noBtn.onclick = () => cleanup(false);
+      });
+    };
 
     const st = await cue.captureState();
     $('#live-dot').classList.toggle('off', !st.active);

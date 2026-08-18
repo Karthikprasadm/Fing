@@ -13,6 +13,14 @@ const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
 const { buildInterviewContext, detectCategory } = require('./src/interview-context');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 
+// Prevent Electron from showing native crash/error dialog popups during runtime
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception in Main Process:', error);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection in Main Process at:', promise, 'reason:', reason);
+});
+
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
 // start on Electron 31–38 unless these Chromium features are enabled; without
 // them getDisplayMedia rejects with "Error starting capture" and meeting audio
