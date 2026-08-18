@@ -1670,10 +1670,15 @@
   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
+  let mouseThrottle = null;
   document.addEventListener('mousemove', (e) => {
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim, #confirm-modal'));
-    setIgnore(!overUI);
+    if (mouseThrottle) return;
+    mouseThrottle = setTimeout(() => {
+      mouseThrottle = null;
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim, #confirm-modal'));
+      setIgnore(!overUI);
+    }, 30);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
 

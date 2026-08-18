@@ -173,6 +173,7 @@ button:focus { outline: none; }
     0 4px 16px rgba(0,0,0,0.35), 
     inset 0 1px 0 rgba(255,255,255,0.16),
     0 0 30px rgba(99, 102, 241, 0.04);
+  will-change: backdrop-filter, transform, opacity;
 }
 #panel { padding: 20px 22px; animation: overlayIn 260ms cubic-bezier(0.22,1,0.36,1); }
 #panel.collapsed { display: none; }
@@ -476,6 +477,7 @@ button:focus { outline: none; }
   position: fixed; inset: 0; z-index: 20;
   display: grid; place-items: center;
   background: rgba(0,0,0,0.35); backdrop-filter: blur(4px);
+  will-change: backdrop-filter;
 }
 #settings-scrim.hidden { display: none; }
 #settings { width: min(480px, 94vw); padding: 18px 20px 20px; -webkit-app-region: no-drag; max-height: 88vh; display: flex; flex-direction: column; }
@@ -964,6 +966,7 @@ button:active, .act:active, .smart-pill:active, .more-btn:active, #send-btn:acti
   position: fixed; inset: 0; z-index: 1000;
   display: grid; place-items: center;
   background: rgba(0,0,0,0.5); backdrop-filter: blur(8px);
+  will-change: backdrop-filter;
 }
 .confirm-modal.hidden { display: none !important; }
 .confirm-modal-content {
