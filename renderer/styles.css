@@ -426,6 +426,7 @@ button:focus { outline: none; }
   font-family: var(--font); font-size: 15px; line-height: 22px;
   max-height: 140px; overflow-y: auto;
   -webkit-user-select: text; user-select: text;
+  cursor: default !important;
 }
 #composer-bottom { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }
