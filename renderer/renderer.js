@@ -1223,7 +1223,6 @@
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
   function openSettings() {
-    cue.setFocusable(true);
     fillSettings();
     scrim.classList.remove('hidden');
     refreshWhisperModels();
@@ -1231,7 +1230,6 @@
   async function closeSettings() {
     if (await saveSettings()) {
       scrim.classList.add('hidden');
-      cue.setFocusable(false);
     }
   }
   $('#more-btn').addEventListener('click', openSettings);
@@ -1779,16 +1777,9 @@
     $('#ob-next').textContent = obIndex === OB_STEPS.length - 1 ? 'Done' : 'Next';
     $('#ob-skip').style.visibility = obIndex === OB_STEPS.length - 1 ? 'hidden' : 'visible';
   }
-  function showOnboard() {
-    cue.setFocusable(true);
-    obIndex = 0;
-    renderOnboard();
-    obScrim.classList.remove('hidden');
-    setIgnore(false);
-  }
+  function showOnboard() { obIndex = 0; renderOnboard(); obScrim.classList.remove('hidden'); setIgnore(false); }
   async function finishOnboard() {
     obScrim.classList.add('hidden');
-    cue.setFocusable(false);
     if (settings && !settings.onboarded) { settings.onboarded = true; await cue.settingsSet({ onboarded: true }); }
   }
   $('#ob-next').addEventListener('click', () => { if (obIndex === OB_STEPS.length - 1) finishOnboard(); else { obIndex++; renderOnboard(); } });
