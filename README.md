@@ -63,14 +63,17 @@ Go to the [**Releases**](../../releases) page, then choose your platform:
 
 You need [Node.js](https://nodejs.org) 22.12+ installed (required by dev dependencies). No Xcode and no Visual Studio build tools required — cue deliberately avoids native modules.
 
+> [!TIP]
+> **Windows Users**: See the detailed [Windows Setup Guide](how_to_run.md) for step-by-step instructions, PowerShell script execution bypasses, and troubleshooting.
+
 ```bash
-git clone https://github.com/Blueturboguy07/cue.git
-cd cue
+git clone https://github.com/Karthikprasadm/Fing.git
+cd Fing
 npm install
 npm start
 ```
 
-That's the whole setup on Windows. There's no permission dance — grant the mic when Windows asks and you're done.
+That's the whole setup. There's no permission dance on Windows — grant the mic when Windows asks and you're done.
 
 To build a standalone app:
 ```bash
