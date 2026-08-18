@@ -183,6 +183,10 @@
 
           <label class="s-label" for="whisper-model">Local model</label>
           <select id="whisper-model" class="s-select"></select>
+          <div class="custom-select" id="custom-whisper-model">
+            <div class="custom-select-trigger"><span>Select Model</span><span class="chev"></span></div>
+            <div class="custom-select-options hidden"></div>
+          </div>
           <div id="whisper-model-detail" class="s-note"></div>
 
           <div id="whisper-progress-wrap" class="whisper-progress-wrap hidden">
@@ -203,6 +207,10 @@
               <option value="auto">Auto-detect</option>
               <option value="en">English</option>
             </select>
+            <div class="custom-select compact" id="custom-whisper-language">
+              <div class="custom-select-trigger"><span>Auto-detect</span><span class="chev"></span></div>
+              <div class="custom-select-options hidden"></div>
+            </div>
           </div>
           <div class="s-field">
             <span>CPU threads</span>

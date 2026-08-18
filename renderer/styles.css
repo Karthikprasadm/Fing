@@ -511,12 +511,85 @@ button:focus { outline: none; }
 .s-field input:focus { border-color: var(--accent); }
 .s-help { color: var(--tx-mut); font-size: 11px; line-height: 1.4; margin: 4px 0 2px 88px; }
 .s-select {
-  width: 100%; padding: 8px 10px; border-radius: var(--r-8);
-  border: 1px solid rgba(255,255,255,0.14); background: #17191f;
-  color: var(--tx-1); font-size: 13px; font-family: var(--font); outline: none;
+  display: none !important;
 }
-.s-select:focus { border-color: var(--accent); }
-.s-select.compact { flex: 1; width: auto; }
+
+/* Custom HTML Select Dropdowns */
+.custom-select {
+  position: relative;
+  width: 100%;
+  font-family: var(--font);
+  font-size: 13.5px;
+  color: var(--tx-1);
+  user-select: none;
+}
+.custom-select.compact {
+  width: 130px;
+}
+.custom-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: var(--r-8);
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.custom-select-trigger:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.20);
+}
+.custom-select-trigger .chev {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+}
+.custom-select-trigger .chev::after {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid rgba(255,255,255,0.7);
+  border-bottom: 1.5px solid rgba(255,255,255,0.7);
+  transform: rotate(45deg);
+  margin-bottom: 2px;
+}
+.custom-select-options {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  border-radius: var(--r-8);
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(20, 22, 30, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.custom-select.compact .custom-select-options {
+  min-width: 140px;
+  left: auto;
+  right: 0;
+}
+.custom-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.custom-option:hover {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--accent-hi);
+}
+.custom-option.selected {
+  background: rgba(99, 102, 241, 0.25);
+  color: #fff;
+  font-weight: 500;
+}
 .s-note { color: var(--tx-mut); font-size: 11.5px; line-height: 1.45; }
 .whisper-card {
   display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding: 12px;

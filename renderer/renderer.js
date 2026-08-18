@@ -1253,6 +1253,74 @@
     $('#custom-endpoint-settings').classList.toggle('hidden', settings.provider !== 'custom');
   }
 
+  // ---- custom select synchronization ----
+  function syncCustomSelect(selectId, customId) {
+    const nativeSelect = document.getElementById(selectId);
+    const customSelect = document.getElementById(customId);
+    if (!nativeSelect || !customSelect) return;
+
+    const trigger = customSelect.querySelector('.custom-select-trigger');
+    const triggerText = trigger.querySelector('span');
+    const optionsContainer = customSelect.querySelector('.custom-select-options');
+
+    // Toggle dropdown
+    trigger.onclick = (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.custom-select-options').forEach(el => {
+        if (el !== optionsContainer) el.classList.add('hidden');
+      });
+      optionsContainer.classList.toggle('hidden');
+    };
+
+    // Rebuild options list
+    function rebuild() {
+      optionsContainer.innerHTML = '';
+      Array.from(nativeSelect.options).forEach(opt => {
+        const div = document.createElement('div');
+        div.className = 'custom-option';
+        if (opt.value === nativeSelect.value) {
+          div.classList.add('selected');
+          if (triggerText) triggerText.textContent = opt.textContent;
+        }
+        div.textContent = opt.textContent;
+        div.onclick = (e) => {
+          e.stopPropagation();
+          nativeSelect.value = opt.value;
+          nativeSelect.dispatchEvent(new Event('change'));
+          optionsContainer.querySelectorAll('.custom-option').forEach(el => el.classList.remove('selected'));
+          div.classList.add('selected');
+          if (triggerText) triggerText.textContent = opt.textContent;
+          optionsContainer.classList.add('hidden');
+        };
+        optionsContainer.appendChild(div);
+      });
+    }
+
+    rebuild();
+
+    // Listen for programmatical or external changes to native select
+    if (!nativeSelect._hasSyncListener) {
+      nativeSelect.addEventListener('change', () => {
+        const selectedOpt = nativeSelect.options[nativeSelect.selectedIndex];
+        if (selectedOpt && triggerText) {
+          triggerText.textContent = selectedOpt.textContent;
+        }
+        optionsContainer.querySelectorAll('.custom-option').forEach(el => {
+          el.classList.toggle('selected', el.textContent === (selectedOpt && selectedOpt.textContent));
+        });
+      });
+      nativeSelect._hasSyncListener = true;
+    }
+
+    // Save rebuild ref on element for dynamic refreshes
+    nativeSelect._rebuildCustom = rebuild;
+  }
+
+  // Document click listener to close custom dropdowns on click outside
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.custom-select-options').forEach(el => el.classList.add('hidden'));
+  });
+
   function fillSettings() {
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
@@ -1280,6 +1348,8 @@
     const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
     $('#whisper-language').value = localWhisper.language || 'auto';
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
+    syncCustomSelect('whisper-language', 'custom-whisper-language');
+    $('#whisper-language').dispatchEvent(new Event('change'));
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
     $('#job-description').value = settings.jobDescription || '';
@@ -1449,6 +1519,8 @@
       select.value = selectionExists ? previousSelection : 'base.en';
       if (!settings.localWhisper) settings.localWhisper = {};
       settings.localWhisper.modelId = select.value;
+      if (select._rebuildCustom) select._rebuildCustom();
+      else syncCustomSelect('whisper-model', 'custom-whisper-model');
       status.textContent = whisperOverview.runtime.available
         ? 'Model files are verified before they can be loaded.'
         : whisperOverview.runtime.message;
