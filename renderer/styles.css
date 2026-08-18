@@ -43,6 +43,11 @@ html, body {
   user-select: none;
 }
 
+/* Disable I-beam selection cursor globally on all text inputs, textareas, and editable fields */
+input, textarea, [contenteditable] {
+  cursor: default !important;
+}
+
 /* ============================ Layout ============================ */
 /* Transparent window: no in-page background. You see your real screen behind the panel.
    Empty areas are made click-through from the renderer so they don't block your screen. */
