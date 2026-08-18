@@ -1709,6 +1709,7 @@
   $('#ob-back').addEventListener('click', () => { if (obIndex > 0) { obIndex--; renderOnboard(); } });
   $('#ob-skip').addEventListener('click', finishOnboard);
   $('#logo-btn').addEventListener('click', showOnboard);
+  $('#quit-btn').addEventListener('click', () => cue.quit());
 
   // ---- boot --------------------------------------------------------------
   (async function boot() {
