@@ -112,6 +112,10 @@ input, textarea, [contenteditable] {
 .tb-quit { width: 28px; height: 28px; border-radius: var(--r-8); color: rgba(255,255,255,0.50); }
 .tb-quit:hover { background: rgba(255,68,68,0.18); color: #ff6b6b; }
 
+.tb-stealth { gap: 6px; padding: 5px 10px; border-radius: var(--r-pill); font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.9); }
+.tb-stealth:hover { background: rgba(255,255,255,0.08); }
+.tb-stealth.off { color: rgba(255,255,255,0.4) !important; }
+
 /* ============================ Mic permission banner ============================ */
 #mic-perm-banner {
   display: none;

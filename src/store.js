@@ -21,6 +21,7 @@ const DEFAULTS = {
   smart: false,
   baseUrl: '',
   minimaxRegion: 'global_en',
+  stealthMode: true,
   apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '' },
   azureEndpoint: '',
   // Tab 2: Profile

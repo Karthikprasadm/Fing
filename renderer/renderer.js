@@ -1788,9 +1788,23 @@
   $('#logo-btn').addEventListener('click', showOnboard);
   $('#quit-btn').addEventListener('click', () => cue.quit());
 
+  function renderStealthButton() {
+    if (!settings) return;
+    const isStealth = !!settings.stealthMode;
+    $('#stealth-btn').innerHTML = icon(isStealth ? 'eye' : 'eye-off', { size: 14 }) + `<span>${isStealth ? 'Stealth' : 'Visible'}</span>`;
+    $('#stealth-btn').classList.toggle('off', !isStealth);
+  }
+  $('#stealth-btn').addEventListener('click', async () => {
+    settings.stealthMode = !settings.stealthMode;
+    await cue.settingsSet({ stealthMode: settings.stealthMode });
+    cue.setStealth(settings.stealthMode);
+    renderStealthButton();
+  });
+
   // ---- boot --------------------------------------------------------------
   (async function boot() {
     settings = await cue.settingsGet();
+    renderStealthButton();
     const platformInfo = await cue.platformInfo();
 
     // R4: shortcut hints

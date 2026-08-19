@@ -239,7 +239,8 @@ function createWindow() {
   const shouldProtect = !process.env.CUE_NO_PROTECT;
   if (shouldProtect) {
     if (WIN_SUPPORTS_CONTENT_PROTECTION) {
-      win.setContentProtection(true);
+      const settings = store.getSettings();
+      win.setContentProtection(!!settings.stealthMode);
     } else {
       // Will notify the renderer after it loads
       console.log(`[cue] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
@@ -638,6 +639,7 @@ ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, {
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('win:focusable', (_e, v) => { if (win) win.setFocusable(!!v); });
+ipcMain.on('win:stealth', (_e, v) => { if (win) win.setContentProtection(!!v); });
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
