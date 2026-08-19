@@ -1791,7 +1791,7 @@
   function renderStealthButton() {
     if (!settings) return;
     const isStealth = !!settings.stealthMode;
-    $('#stealth-btn').innerHTML = icon(isStealth ? 'eye' : 'eye-off', { size: 14 }) + `<span>${isStealth ? 'Stealth' : 'Visible'}</span>`;
+    $('#stealth-btn').innerHTML = icon('lightbulb', { size: 14 }) + `<span>${isStealth ? 'Stealth' : 'Visible'}</span>`;
     $('#stealth-btn').classList.toggle('off', !isStealth);
   }
   $('#stealth-btn').addEventListener('click', async () => {
