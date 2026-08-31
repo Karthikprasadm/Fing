@@ -32,6 +32,11 @@ test('explicit cloud selection does not cross-fallback to another provider', () 
     sttProvider: 'gemini',
     apiKeys: { openai: 'openai-key', gemini: 'gemini-key' }
   });
+  const deepgram = createSTT({
+    sttProvider: 'deepgram',
+    apiKeys: { openai: 'openai-key', gemini: 'gemini-key', deepgram: 'deepgram-key' }
+  });
   assert.deepEqual(openai.providers, ['openai']);
   assert.deepEqual(gemini.providers, ['gemini']);
+  assert.deepEqual(deepgram.providers, ['deepgram']);
 });

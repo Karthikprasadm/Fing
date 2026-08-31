@@ -181,4 +181,72 @@ class AudioRingBuffer {
   }
 }
 
-module.exports = { AdaptiveVAD, AudioRingBuffer };
+// CrossChannelEchoGate — Prevents candidate microphone audio from leaking into the
+// interviewer ("Them") transcript when using speakers, open-back headphones, or high-gain mics.
+class CrossChannelEchoGate {
+  constructor(options = {}) {
+    this.mode = options.mode || 'balanced'; // 'off' | 'gentle' | 'balanced' | 'aggressive'
+    this.hangoverMs = options.hangoverMs || 350; // hangover window after candidate speaks (ms)
+    this.lastYouSpeechTs = 0;
+    this.youEnergy = 0;
+    this.themEnergy = 0;
+  }
+
+  setMode(mode) {
+    this.mode = mode || 'balanced';
+  }
+
+  computeRMS(pcmBuffer) {
+    if (!pcmBuffer || pcmBuffer.length < 2) return 0;
+    let sum = 0;
+    const n = Math.floor(pcmBuffer.length / 2);
+    for (let i = 0; i < pcmBuffer.length - 1; i += 2) {
+      const s = pcmBuffer.readInt16LE(i);
+      sum += s * s;
+    }
+    return Math.sqrt(sum / n);
+  }
+
+  onYouFrame(pcmBuffer, isSpeaking = false) {
+    this.youEnergy = this.computeRMS(pcmBuffer);
+    if (isSpeaking || this.youEnergy > 200) {
+      this.lastYouSpeechTs = Date.now();
+    }
+  }
+
+  // Returns true if this 'them' frame should be suppressed (gated / muted)
+  shouldSuppressThem(pcmBuffer) {
+    if (this.mode === 'off') return false;
+
+    this.themEnergy = this.computeRMS(pcmBuffer);
+    const now = Date.now();
+    const withinHangover = (now - this.lastYouSpeechTs) < this.hangoverMs;
+
+    if (!withinHangover) {
+      return false;
+    }
+
+    if (this.mode === 'aggressive') {
+      // Aggressive: Strict half-duplex priority. Any sound on 'them' during or right after candidate speech is gated.
+      return true;
+    }
+
+    if (this.mode === 'balanced') {
+      // Balanced: Suppress if system audio is lower than or proportional to mic acoustic bleed.
+      if (this.themEnergy < Math.max(150, this.youEnergy * 0.85)) {
+        return true;
+      }
+    }
+
+    if (this.mode === 'gentle') {
+      // Gentle: Only suppress lower-energy ambient/echo bleed.
+      if (this.themEnergy < Math.max(100, this.youEnergy * 0.4)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+}
+
+module.exports = { AdaptiveVAD, AudioRingBuffer, CrossChannelEchoGate };

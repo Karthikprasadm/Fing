@@ -3,12 +3,11 @@
 
 const DEFAULTS = {
   assist: 'CommandOrControl+Return',
+  say: 'CommandOrControl+Shift+Return',
   leetcode: 'CommandOrControl+H',
-  quit: 'CommandOrControl+Shift+X',
-  hide: 'Shift+Q', // Windows-only convenience (no Cmd key)
-  listening: 'CommandOrControl+Shift+L',
-  passthrough: 'CommandOrControl+Shift+I',
-  screen: 'CommandOrControl+Shift+S'
+  boss: 'CommandOrControl+Shift+Z',
+  hide: 'CommandOrControl+Shift+/',
+  quit: 'CommandOrControl+Shift+X'
 };
 
 // Every action that maps to a shortcut. Values = defaults; can be overridden via settings.

@@ -9,8 +9,9 @@ const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
-const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
+const { AdaptiveVAD, AudioRingBuffer, CrossChannelEchoGate } = require('./src/vad');
 const { buildInterviewContext, detectCategory } = require('./src/interview-context');
+const { resolveShortcuts, isValid } = require('./src/shortcuts');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 
 // Prevent Electron from showing native crash/error dialog popups during runtime
@@ -39,7 +40,7 @@ let win = null;
 // false when another application already owns the combination, and nothing used
 // to look at that — so the only symptom was a key that did nothing. Iris reads
 // this and can say which key is taken instead of guessing from a screenshot.
-const shortcutState = { assist: false, say: false, leetcode: false, quit: false };
+const shortcutState = { assist: false, say: false, leetcode: false, hide: false, boss: false, quit: false };
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 
@@ -97,6 +98,7 @@ const ringBuffers = {
   you: new AudioRingBuffer(300, 16000),
   them: new AudioRingBuffer(300, 16000)
 };
+const echoGate = new CrossChannelEchoGate({ mode: store.getSettings().audio?.echoGate || 'balanced' });
 
 function pushTranscript(turn) {
   transcript.push(turn);
@@ -167,7 +169,7 @@ async function startLocalWhisper(settings) {
   } catch (error) {
     if (localWhisperTranscriber === transcriber) localWhisperTranscriber = null;
     activeWhisperModelId = null;
-    if (transcriber) await transcriber.forceStop().catch(() => {});
+    if (transcriber) await transcriber.forceStop().catch(() => { });
     throw error;
   }
 }
@@ -210,12 +212,13 @@ function createWindow() {
     y: startY,
     frame: false,
     transparent: true,
-    hasShadow: false,
+    hasShadow: true,
     resizable: true,
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
     focusable: true,
+    show: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -224,9 +227,8 @@ function createWindow() {
     }
   };
 
-  // Fix 1: On Windows, set type:'toolbar' which sets WS_EX_TOOLWINDOW.
-  // This removes the window from Alt+Tab AND the taskbar entirely.
-  // On macOS, this is not needed (dock hiding + Mission Control handle it).
+  // On Windows, set type:'toolbar' which sets WS_EX_TOOLWINDOW.
+  // This completely removes the window from the taskbar and Alt+Tab.
   if (isWindows) {
     winOptions.type = 'toolbar';
   }
@@ -247,7 +249,11 @@ function createWindow() {
     }
   }
 
-  win.setAlwaysOnTop(true, 'screen-saver', 1);
+  if (isMac) {
+    win.setAlwaysOnTop(true, 'screen-saver', 1);
+  } else {
+    win.setAlwaysOnTop(true, 'pop-up-menu');
+  }
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   if (isMac && typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
 
@@ -264,11 +270,14 @@ function createWindow() {
     }, 500);
   });
 
-  win.setTitle('Microsoft Edge Update'); // set before load
+  win.setTitle('cue');
 
   win.webContents.on('did-finish-load', () => {
-    win.showInactive();
-    win.setTitle('Microsoft Edge Update');
+    win.show();
+    win.focus();
+    if (typeof win.moveTop === 'function') win.moveTop();
+    win.setTitle('cue');
+    startMouseTracker();
     // Warn about missing content protection on old Windows builds
     if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
       send('status', {
@@ -276,6 +285,11 @@ function createWindow() {
       });
     }
   });
+  win.webContents.on('will-navigate', (e) => {
+    e.preventDefault();
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
   win.webContents.on('render-process-gone', (_e, d) => {
     console.log('[cue] renderer gone', JSON.stringify(d));
     recordEvent({ level: 'fatal', event: 'renderer_gone', code: d && d.reason, msg: 'renderer process ended: ' + JSON.stringify(d), frame: 'BrowserWindow' });
@@ -407,6 +421,16 @@ function stopStreamingSTT() {
 // -------- audio routing (streaming or batch) --------
 function routeAudio(channel, pcmBuffer) {
   const buf = Buffer.from(pcmBuffer);
+
+  if (channel === 'you') {
+    const isSpeaking = vad.you.getState().isSpeaking;
+    echoGate.onYouFrame(buf, isSpeaking);
+  } else if (channel === 'them') {
+    if (echoGate.shouldSuppressThem(buf)) {
+      // Suppress cross-talk bleed so interviewer channel doesn't transcribe candidate speaking
+      return;
+    }
+  }
 
   if (localWhisperTranscriber) {
     localWhisperTranscriber.push(channel, buf);
@@ -540,7 +564,7 @@ async function runFeature(mode, userText) {
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
     // leaving state.busy = true and wedging every later question until an app restart.
     let watchdog = null;
-    let rearm = () => {};
+    let rearm = () => { };
     const stalled = new Promise((_res, reject) => {
       rearm = () => {
         clearTimeout(watchdog);
@@ -574,12 +598,27 @@ async function runFeature(mode, userText) {
 
 // -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
-ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
+ipcMain.handle('settings:set', (_e, patch) => {
+  sttDisabled = false;
+  if (patch && patch.audio && patch.audio.echoGate) {
+    echoGate.setMode(patch.audio.echoGate);
+  }
+  const result = store.setSettings(patch);
+  if (patch && patch.shortcuts) {
+    registerShortcuts();
+  }
+  return result;
+});
+ipcMain.handle('shortcuts:reset', () => {
+  const updated = store.setSettings({ shortcuts: {} });
+  registerShortcuts();
+  return resolveShortcuts(updated.shortcuts || {});
+});
 ipcMain.handle('capture:toggle', () => {
   const targetState = !desiredCaptureState;
   desiredCaptureState = targetState;
   if (!targetState && !state.capturing && localWhisperTranscriber) {
-    localWhisperTranscriber.forceStop().catch(() => {});
+    localWhisperTranscriber.forceStop().catch(() => { });
   }
   captureTransition = captureTransition
     .catch(() => state.capturing)
@@ -636,7 +675,57 @@ ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
-ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
+
+// Dynamic cursor tracking for click-through on Windows:
+// Continuously tests if cursor is over interactive UI elements. If outside, enables
+// setIgnoreMouseEvents(true) so clicks pass seamlessly to desktop/apps below.
+let interactiveRects = [];
+let mousePollingTimer = null;
+let currentIgnoring = null;
+
+ipcMain.on('window:interactive-rects', (_event, rects) => {
+  if (Array.isArray(rects)) {
+    interactiveRects = rects;
+  }
+});
+
+function startMouseTracker() {
+  if (mousePollingTimer || !isWindows) return;
+  mousePollingTimer = setInterval(() => {
+    if (!win || win.isDestroyed() || !win.isVisible()) return;
+
+    try {
+      const cursor = screen.getCursorScreenPoint();
+      const bounds = win.getBounds();
+
+      const rx = cursor.x - bounds.x;
+      const ry = cursor.y - bounds.y;
+
+      let overInteractive = false;
+      if (rx >= 0 && rx <= bounds.width && ry >= 0 && ry <= bounds.height) {
+        if (interactiveRects.length === 0) {
+          overInteractive = true;
+        } else {
+          for (const r of interactiveRects) {
+            if (rx >= r.x && rx <= (r.x + r.width) && ry >= r.y && ry <= (r.y + r.height)) {
+              overInteractive = true;
+              break;
+            }
+          }
+        }
+      }
+
+      const shouldIgnore = !overInteractive;
+      if (shouldIgnore !== currentIgnoring) {
+        currentIgnoring = shouldIgnore;
+        win.setIgnoreMouseEvents(shouldIgnore, { forward: true });
+      }
+    } catch {
+      // Ignore transient errors
+    }
+  }, 35);
+}
+ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => { }); });
 ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('win:focusable', (_e, v) => { if (win) win.setFocusable(!!v); });
 ipcMain.on('win:stealth', (_e, v) => { if (win) win.setContentProtection(!!v); });
@@ -646,14 +735,27 @@ ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // The parsed text is RETURNED to the renderer, which drops it into the existing
 // #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
-  const res = await dialog.showOpenDialog(win, {
-    properties: ['openFile'],
-    filters: [{ name: 'Resume / Job description', extensions: ['pdf', 'docx'] }]
-  });
-  if (res.canceled || !res.filePaths.length) return null;
-  const filePath = res.filePaths[0];
-  const text = await parseDocumentFile(filePath);
-  return { fileName: path.basename(filePath), text };
+  const wasAlwaysOnTop = win ? win.isAlwaysOnTop() : false;
+  try {
+    if (win && wasAlwaysOnTop) win.setAlwaysOnTop(false);
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Select Resume or Job Description (PDF or DOCX)',
+      properties: ['openFile', 'dontAddToRecent'],
+      filters: [{ name: 'Documents (*.pdf, *.docx)', extensions: ['pdf', 'docx'] }]
+    });
+    if (res.canceled || !res.filePaths.length) return null;
+    const filePath = res.filePaths[0];
+    const text = await parseDocumentFile(filePath);
+    return { fileName: path.basename(filePath), text };
+  } finally {
+    if (win && wasAlwaysOnTop) {
+      if (isMac) {
+        win.setAlwaysOnTop(true, 'screen-saver', 1);
+      } else {
+        win.setAlwaysOnTop(true, 'pop-up-menu');
+      }
+    }
+  }
 }
 ipcMain.handle('profile:pickDocument', async () => {
   try {
@@ -681,16 +783,46 @@ ipcMain.on('permissions:continue', async () => {
 
 // -------- shortcuts --------
 function registerShortcuts() {
-  shortcutState.assist = globalShortcut.register('CommandOrControl+Return', () => runFeature('assist', ''));
-  shortcutState.say = globalShortcut.register('CommandOrControl+Shift+Return', () => runFeature('say', ''));
-  shortcutState.leetcode = globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
-  shortcutState.hide = globalShortcut.register('CommandOrControl+Shift+/', () => send('hide:toggle', {}));
-  shortcutState.quit = globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
+  globalShortcut.unregisterAll();
+  const settings = store.getSettings();
+  const sc = resolveShortcuts(settings.shortcuts || {});
+
+  const handlers = {
+    assist: () => runFeature('assist', ''),
+    say: () => runFeature('say', ''),
+    leetcode: () => runFeature('leetcode', ''),
+    hide: () => send('hide:toggle', {}),
+    boss: () => {
+      if (!win || win.isDestroyed()) return;
+      if (win.isVisible()) {
+        win.hide();
+      } else {
+        win.show();
+        win.focus();
+      }
+    },
+    quit: () => app.quit()
+  };
+
+  for (const [action, handler] of Object.entries(handlers)) {
+    const accel = sc[action];
+    if (accel && isValid(accel)) {
+      try {
+        shortcutState[action] = globalShortcut.register(accel, handler);
+      } catch (_) {
+        shortcutState[action] = false;
+      }
+    } else {
+      shortcutState[action] = false;
+    }
+  }
   for (const [name, wasRegistered] of Object.entries(shortcutState)) {
     if (!wasRegistered) {
       recordEvent({ level: 'warn', event: 'shortcut_unavailable', msg: 'another application holds the ' + name + ' shortcut', frame: 'registerShortcuts', context: { shortcut: name } });
     }
   }
+
+  send('shortcuts:updated', { shortcuts: sc, states: { ...shortcutState } });
 }
 
 // -------- permissions --------
@@ -714,7 +846,7 @@ async function verifyScreenAccess() {
       // toBitmap() returns raw RGBA bytes; any non-zero byte means real content
       if (bmp && bmp.some(byte => byte !== 0)) return 'granted';
     }
-  } catch (_) {}
+  } catch (_) { }
 
   return sysStatus;  // return the original system status if fallback didn't help
 }
@@ -741,7 +873,7 @@ async function requestPermissions() {
   // sources via desktopCapturer will cause macOS to prompt the user.
   const screenStatus = await verifyScreenAccess();
   if (screenStatus !== 'granted') {
-    try { await desktopCapturer.getSources({ types: ['screen'] }); } catch (_) {}
+    try { await desktopCapturer.getSources({ types: ['screen'] }); } catch (_) { }
   }
 
   const status = await getPermissionStatus();
@@ -785,14 +917,18 @@ function launchApp() {
 
   // System-audio loopback for getDisplayMedia: hand back a screen source with 'loopback'
   // audio so the renderer can capture what's playing (Zoom/Meet) using cue's own grant.
-  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      if (!sources.length) return callback();
-      const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
-      else request.audio = 'loopback';
-      callback(request);
-    }).catch(() => callback());
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      if (!sources.length) {
+        callback({ video: null, audio: null });
+        return;
+      }
+      callback({ video: sources[0], audio: 'loopback' });
+    } catch (err) {
+      console.log('[cue] desktopCapturer.getSources failed:', err && err.message);
+      callback({ video: null, audio: null });
+    }
   }, { useSystemPicker: false });
 
   // Started before the shortcuts so their registration failures are recorded.
@@ -846,7 +982,7 @@ app.on('will-quit', () => {
   if (whisperModelManager?.activeDownload) {
     whisperModelManager.cancelDownload(whisperModelManager.activeDownload.modelId);
   }
-  if (localWhisperTranscriber) localWhisperTranscriber.forceStop().catch(() => {});
+  if (localWhisperTranscriber) localWhisperTranscriber.forceStop().catch(() => { });
 });
 app.on('window-all-closed', () => app.quit());
 

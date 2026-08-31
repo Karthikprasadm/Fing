@@ -58,11 +58,32 @@ async function transcribeGemini(apiKey, wav) {
   return ((res && res.text) || '').trim();
 }
 
+async function transcribeDeepgram(apiKey, wav) {
+  const response = await fetch('https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=en', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${apiKey}`,
+      'Content-Type': 'audio/wav'
+    },
+    body: wav
+  });
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Deepgram STT error (${response.status}): ${errText}`);
+  }
+  const data = await response.json();
+  const transcript = data.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+  return (transcript || '').trim();
+}
+
 function createSTT(settings) {
   const keys = settings.apiKeys || {};
   const selectedProvider = settings.sttProvider || 'auto';
   const vocabPrompt = buildVocabPrompt(settings);
   const chain = [];
+  if ((selectedProvider === 'auto' || selectedProvider === 'deepgram') && keys.deepgram) {
+    chain.push({ p: 'deepgram', fn: (wav) => transcribeDeepgram(keys.deepgram, wav) });
+  }
   if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
     chain.push({ p: 'openai', fn: (wav) => transcribeOpenAI(keys.openai, wav, settings.sttModel, undefined, vocabPrompt) });
   }
@@ -72,7 +93,8 @@ function createSTT(settings) {
   if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
     chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
   }
-  if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
+  if (keys.deepgram && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'deepgram'), 1)[0]);
+  else if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
 
   let disabledUntil = 0;
   let lastProvider = null;

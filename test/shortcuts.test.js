@@ -28,7 +28,22 @@ test('isValid accepts good accelerators and rejects junk', () => {
   assert.ok(isValid('CommandOrControl+Return'));
   assert.ok(isValid('Shift+Q'));
   assert.ok(isValid('F1'));
+  assert.ok(isValid('Alt+Space'));
+  assert.ok(isValid('Ctrl+Shift+A'));
+  assert.ok(isValid('F8'));
   assert.strictEqual(isValid(''), false);
   assert.strictEqual(isValid('++'), false);
   assert.strictEqual(isValid(null), false);
+});
+
+test('resolveShortcuts preserves say default and allows remapping', () => {
+  assert.strictEqual(DEFAULTS.say, 'CommandOrControl+Shift+Return');
+  const remapped = resolveShortcuts({
+    assist: 'Alt+Space',
+    say: 'Ctrl+Shift+A'
+  });
+  assert.strictEqual(remapped.assist, 'Alt+Space');
+  assert.strictEqual(remapped.say, 'Ctrl+Shift+A');
+  assert.strictEqual(remapped.leetcode, DEFAULTS.leetcode);
+  assert.strictEqual(findConflicts(remapped).length, 0);
 });

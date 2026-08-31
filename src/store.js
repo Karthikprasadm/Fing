@@ -19,10 +19,23 @@ const DEFAULTS = {
     threads: 0
   },
   smart: false,
+  audio: {
+    micDeviceId: 'default',
+    echoGate: 'balanced', // 'off' | 'gentle' | 'balanced' | 'aggressive'
+    crossTalkSuppression: true
+  },
+  shortcuts: {
+    assist: 'CommandOrControl+Return',
+    say: 'CommandOrControl+Shift+Return',
+    leetcode: 'CommandOrControl+H',
+    boss: 'CommandOrControl+Shift+Z',
+    hide: 'CommandOrControl+Shift+/',
+    quit: 'CommandOrControl+Shift+X'
+  },
   baseUrl: '',
   minimaxRegion: 'global_en',
   stealthMode: true,
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '' },
+  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '', azure: '', openrouter: '' },
   azureEndpoint: '',
   // Tab 2: Profile
   resumeText: '',
@@ -54,7 +67,8 @@ const DEFAULTS = {
     ollama: { fast: 'llama3.2', smart: 'llama3.3' },
     groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
     minimax: { fast: 'MiniMax-M2.7', smart: 'MiniMax-M3' },
-    azure: { fast: 'gpt-4o-mini', smart: 'gpt-4o' }
+    azure: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
+    openrouter: { fast: 'google/gemini-2.5-flash', smart: 'anthropic/claude-3.5-sonnet' }
   }
 };
 

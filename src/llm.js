@@ -17,7 +17,8 @@ const DEFAULT_MODELS = {
   ollama: 'llama3.2',
   groq: 'llama-3.1-8b-instant',
   minimax: 'MiniMax-M2.7',
-  azure: 'gpt-4o-mini'
+  azure: 'gpt-4o-mini',
+  openrouter: 'meta-llama/llama-3.3-70b-instruct:free'
 };
 
 // Gemini model ids that Google has since deprecated/retired. A settings file
@@ -107,7 +108,15 @@ function stripDataUrl(dataUrl) {
 
 async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken }) {
   const OpenAI = require('openai');
-  const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
+  const opts = { apiKey };
+  if (baseURL) opts.baseURL = baseURL;
+  if (baseURL && baseURL.includes('openrouter.ai')) {
+    opts.defaultHeaders = {
+      'HTTP-Referer': 'https://github.com/Karthikprasadm/Fing',
+      'X-Title': 'Cue'
+    };
+  }
+  const client = new OpenAI(opts);
   const messages = [{ role: 'system', content: system }];
   turns.forEach((t, i) => {
     const last = i === turns.length - 1;
@@ -348,6 +357,7 @@ function createLLM(settings) {
         if (provider === 'anthropic') return await streamAnthropic(args);
         if (provider === 'gemini') return await streamGemini(args);
         if (provider === 'azure') return await streamAzure(args);
+        if (provider === 'openrouter') return await streamOpenAI({ ...args, baseURL: 'https://openrouter.ai/api/v1' });
         throw new Error('unknown provider: ' + provider);
       } catch (error) {
         throw new Error(formatProviderErrorMessage(error, provider, model));

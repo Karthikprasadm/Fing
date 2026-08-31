@@ -17,11 +17,12 @@ function locateWhisperRuntime({
   if (environment.CUE_WHISPER_RUNTIME) {
     candidates.push(path.resolve(environment.CUE_WHISPER_RUNTIME));
   }
-  if (isPackaged && resourcesPath) {
+  if (resourcesPath) {
     candidates.push(path.join(resourcesPath, 'whisper-runtime'));
   }
-  if (!isPackaged && appPath) {
+  if (appPath) {
     candidates.push(path.join(appPath, '.cache', 'whisper-runtime', target.key));
+    candidates.push(path.join(appPath, 'whisper-runtime', target.key));
   }
 
   for (const runtimeDirectory of candidates) {

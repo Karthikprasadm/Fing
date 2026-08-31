@@ -602,14 +602,19 @@
   async function startMic() {
     if (micStream) return;
     try {
+      const micDeviceId = settings?.audio?.micDeviceId;
+      const audioConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+        sampleRate: 16000
+      };
+      if (micDeviceId && micDeviceId !== 'default') {
+        audioConstraints.deviceId = { exact: micDeviceId };
+      }
       micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 16000
-        }
+        audio: audioConstraints
       });
       // getUserMedia can resolve with a stream that has no usable audio track
       // (e.g. a virtual/placeholder device, or a device that was unplugged
@@ -628,7 +633,8 @@
 
       // Use AudioWorklet for low-latency, off-main-thread processing
       try {
-        await audioCtx.audioWorklet.addModule('audio-worklet-processor.js');
+        const workletUrl = new URL('audio-worklet-processor.js', document.baseURI).href;
+        await audioCtx.audioWorklet.addModule(workletUrl);
         const source = audioCtx.createMediaStreamSource(micStream);
         micWorklet = new AudioWorkletNode(audioCtx, 'cue-audio-processor');
         micWorklet.port.onmessage = (e) => {
@@ -696,6 +702,7 @@
     if (sysStream || sysStarting) return;
     sysStarting = true;
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+      sysStarting = false;
       cue.log('system audio unavailable: getDisplayMedia not supported');
       showStatus('Meeting audio capture is not available on this device build.');
       return;
@@ -718,7 +725,8 @@
 
       // Use AudioWorklet for system audio too
       try {
-        await sysCtx.audioWorklet.addModule('audio-worklet-processor.js');
+        const sysWorkletUrl = new URL('audio-worklet-processor.js', document.baseURI).href;
+        await sysCtx.audioWorklet.addModule(sysWorkletUrl);
         const source = sysCtx.createMediaStreamSource(new MediaStream(tracks));
         sysWorklet = new AudioWorkletNode(sysCtx, 'cue-audio-processor');
         sysWorklet.port.onmessage = (e) => {
@@ -743,8 +751,13 @@
       }
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
-      cue.log('system audio error: ' + message);
-      showStatus('Meeting audio could not be started. Grant screen/audio access to cue and try again.');
+      const name = err && err.name;
+      cue.log('system audio error: ' + name + ' — ' + message);
+      // NotAllowedError means the user cancelled or the handler rejected — not
+      // a real error, just skip silently. Any other failure is actionable.
+      if (name !== 'NotAllowedError' && name !== 'AbortError') {
+        showStatus('Meeting audio could not be started. Grant screen/audio access to cue and try again.');
+      }
     } finally {
       sysStarting = false;
     }
@@ -847,7 +860,11 @@
   // Close sidebar button
   const closeSidebarBtn = document.getElementById('close-sidebar-btn');
   if (closeSidebarBtn) {
-    closeSidebarBtn.addEventListener('click', hideSidebar);
+    closeSidebarBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      hideSidebar();
+    });
   }
 
   function appendTranscriptHistoryTurn(channel, text, isInterim) {
@@ -953,8 +970,6 @@
       }
       // Don't auto-close sidebar — let user keep it open if they want
     }
-    updateSttStatus({ active, streaming });
-    if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
     if (active && mode === 'local') {
       sttState = 'local';
       const label = document.getElementById('stt-status');
@@ -1222,14 +1237,17 @@
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
+  const panelWrap = $('#panel-wrap');
   function openSettings() {
     fillSettings();
     scrim.classList.remove('hidden');
+    if (panelWrap) panelWrap.classList.add('hidden');
     refreshWhisperModels();
   }
   async function closeSettings() {
     if (await saveSettings()) {
       scrim.classList.add('hidden');
+      if (panelWrap) panelWrap.classList.remove('hidden');
     }
   }
   $('#more-btn').addEventListener('click', openSettings);
@@ -1250,7 +1268,30 @@
   });
 
   function updateCustomProviderFields() {
-    $('#custom-endpoint-settings').classList.toggle('hidden', settings.provider !== 'custom');
+    if (!settings) return;
+    const prov = settings.provider;
+
+    // Toggle active provider key fields
+    $('#key-openai').parentElement.classList.toggle('hidden', prov !== 'openai');
+    $('#key-anthropic').parentElement.classList.toggle('hidden', prov !== 'anthropic');
+    $('#key-gemini').parentElement.classList.toggle('hidden', prov !== 'gemini');
+    $('#key-custom').parentElement.classList.toggle('hidden', prov !== 'custom');
+    $('#key-minimax').parentElement.classList.toggle('hidden', prov !== 'minimax');
+    $('#key-ollama').parentElement.classList.toggle('hidden', prov !== 'ollama');
+    $('#key-groq').parentElement.classList.toggle('hidden', prov !== 'groq');
+    $('#key-azure').parentElement.classList.toggle('hidden', prov !== 'azure');
+    $('#key-openrouter').parentElement.classList.toggle('hidden', prov !== 'openrouter');
+
+    // Toggle special wrappers
+    $('#custom-endpoint-settings').classList.toggle('hidden', prov !== 'custom');
+    $('#minimax-region-settings').classList.toggle('hidden', prov !== 'minimax');
+    $('#azure-settings').classList.toggle('hidden', prov !== 'azure');
+  }
+
+  function updateSttFields() {
+    if (!settings) return;
+    const stt = settings.sttProvider;
+    $('#deepgram-key-settings').classList.toggle('hidden', stt !== 'deepgram');
   }
 
   // ---- custom select synchronization ----
@@ -1321,6 +1362,147 @@
     document.querySelectorAll('.custom-select-options').forEach(el => el.classList.add('hidden'));
   });
 
+  const echoGateNotes = {
+    off: 'Off: Raw pass-through. No cross-talk suppression.',
+    gentle: 'Gentle: Suppresses low-level ambient and background acoustic bleed.',
+    balanced: 'Balanced (Recommended): Suppresses candidate microphone bleed into the system loopback channel with 350ms acoustic hangover.',
+    aggressive: 'Aggressive: Strict half-duplex priority. System audio loopback is muted while you are actively speaking.'
+  };
+
+  async function refreshAudioDevices() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((d) => d.kind === 'audioinput');
+      const micSelect = document.getElementById('audio-mic-device');
+      if (!micSelect) return;
+      micSelect.innerHTML = '';
+
+      const defaultOpt = document.createElement('option');
+      defaultOpt.value = 'default';
+      defaultOpt.textContent = 'Default Microphone';
+      micSelect.appendChild(defaultOpt);
+
+      audioInputs.forEach((device, idx) => {
+        if (device.deviceId === 'default') return;
+        const opt = document.createElement('option');
+        opt.value = device.deviceId;
+        opt.textContent = device.label || `Microphone ${idx + 1}`;
+        micSelect.appendChild(opt);
+      });
+
+      const currentMic = (settings?.audio && settings.audio.micDeviceId) || 'default';
+      if (Array.from(micSelect.options).some((o) => o.value === currentMic)) {
+        micSelect.value = currentMic;
+      } else {
+        micSelect.value = 'default';
+      }
+
+      syncCustomSelect('audio-mic-device', 'custom-audio-mic-device');
+    } catch (err) {
+      cue.log('Failed to enumerate audio devices: ' + (err && err.message));
+    }
+  }
+
+  document.querySelectorAll('#echo-gate-seg button').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (!settings.audio) settings.audio = {};
+      settings.audio.echoGate = button.dataset.echoGate;
+      document.querySelectorAll('#echo-gate-seg button').forEach((b) => b.classList.toggle('on', b === button));
+      const gateNote = document.getElementById('echo-gate-note');
+      if (gateNote) gateNote.textContent = echoGateNotes[settings.audio.echoGate] || '';
+      saveSettings();
+    });
+  });
+
+  const micSelect = document.getElementById('audio-mic-device');
+  if (micSelect) {
+    micSelect.addEventListener('change', async (e) => {
+      if (!settings.audio) settings.audio = {};
+      settings.audio.micDeviceId = e.target.value;
+      await saveSettings();
+      if (micStream) {
+        stopMic();
+        await startMic();
+      }
+    });
+  }
+
+  function formatAccelerator(accel) {
+    if (!accel) return '';
+    const isMac = cue.platform === 'darwin';
+    return accel
+      .replace(/CommandOrControl|CmdOrCtrl/gi, isMac ? '⌘' : 'Ctrl')
+      .replace(/Command|Cmd/gi, '⌘')
+      .replace(/Control|Ctrl/gi, 'Ctrl')
+      .replace(/Option|Alt/gi, isMac ? '⌥' : 'Alt')
+      .replace(/Shift/gi, isMac ? '⇧' : 'Shift')
+      .replace(/Return|Enter/gi, isMac ? '↵' : 'Enter');
+  }
+
+  function updateShortcutUIHints(sc) {
+    const s = sc || (settings && settings.shortcuts) || {};
+    const assistAccel = s.assist || 'CommandOrControl+Return';
+    const sayAccel = s.say || 'CommandOrControl+Shift+Return';
+
+    const sayHintEl = document.getElementById('say-shortcut-hint');
+    const assistHintEl = document.getElementById('assist-shortcut-hint');
+    if (sayHintEl) sayHintEl.textContent = formatAccelerator(sayAccel);
+    if (assistHintEl) assistHintEl.textContent = formatAccelerator(assistAccel);
+
+    if (placeholder) {
+      placeholder.innerHTML = `Ask about your screen or conversation, or <span class="keycap">${formatAccelerator(assistAccel)}</span> for Assist`;
+    }
+  }
+
+  function fillShortcutFields(shortcuts = null, states = null) {
+    const sc = shortcuts || (settings && settings.shortcuts) || {};
+    const defs = {
+      assist: 'CommandOrControl+Return',
+      say: 'CommandOrControl+Shift+Return',
+      leetcode: 'CommandOrControl+H',
+      boss: 'CommandOrControl+Shift+Z',
+      quit: 'CommandOrControl+Shift+X'
+    };
+    if ($('#shortcut-assist')) $('#shortcut-assist').value = sc.assist || defs.assist;
+    if ($('#shortcut-say')) $('#shortcut-say').value = sc.say || defs.say;
+    if ($('#shortcut-leetcode')) $('#shortcut-leetcode').value = sc.leetcode || defs.leetcode;
+    if ($('#shortcut-boss')) $('#shortcut-boss').value = sc.boss || defs.boss;
+    if ($('#shortcut-quit')) $('#shortcut-quit').value = sc.quit || defs.quit;
+
+    if (states) {
+      const failed = Object.entries(states).filter(([, ok]) => !ok).map(([name]) => name);
+      const statusEl = $('#shortcuts-status');
+      if (statusEl) {
+        if (failed.length) {
+          statusEl.textContent = `Warning: ${failed.join(', ')} hotkey conflict (in use by another application)`;
+        } else {
+          statusEl.textContent = 'All hotkeys registered successfully.';
+        }
+      }
+    }
+  }
+
+  const resetShortcutsBtn = document.getElementById('reset-shortcuts-btn');
+  if (resetShortcutsBtn) {
+    resetShortcutsBtn.addEventListener('click', async () => {
+      const defs = await cue.shortcutsReset();
+      fillShortcutFields(defs);
+      updateShortcutUIHints(defs);
+      const statusEl = $('#shortcuts-status');
+      if (statusEl) statusEl.textContent = 'Hotkeys reset to defaults.';
+    });
+  }
+
+  cue.on('shortcuts:updated', (data) => {
+    if (data && data.shortcuts) {
+      if (!settings.shortcuts) settings.shortcuts = {};
+      Object.assign(settings.shortcuts, data.shortcuts);
+      updateShortcutUIHints(data.shortcuts);
+      fillShortcutFields(data.shortcuts, data.states);
+    }
+  });
+
   function fillSettings() {
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
@@ -1337,14 +1519,25 @@
     document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
     $('#key-azure').value = settings.apiKeys.azure || '';
     $('#azure-endpoint').value = settings.azureEndpoint || '';
+    $('#key-openrouter').value = settings.apiKeys.openrouter || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     fillAppLinkCallers();
     $('#s-status').textContent = statusText();
+    // Audio device & echo gate
+    const audioSettings = settings.audio || {};
+    const currentGate = audioSettings.echoGate || 'balanced';
+    document.querySelectorAll('#echo-gate-seg button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.echoGate === currentGate);
+    });
+    const gateNote = document.getElementById('echo-gate-note');
+    if (gateNote) gateNote.textContent = echoGateNotes[currentGate] || '';
+    refreshAudioDevices();
     // Transcription tab
     document.querySelectorAll('#stt-provider-seg button').forEach((button) => {
       button.classList.toggle('on', button.dataset.sttProvider === (settings.sttProvider || 'auto'));
     });
+    updateSttFields();
     const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
     $('#whisper-language').value = localWhisper.language || 'auto';
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
@@ -1364,6 +1557,8 @@
     // Q&A tab
     $('#salary-target').value = settings.salaryTarget || '';
     $('#questions-to-ask').value = settings.questionsToAsk || '';
+    // Hotkeys tab
+    fillShortcutFields();
   }
 
   // Whoever cue has been told it may answer questions for. Empty is the normal
@@ -1404,24 +1599,57 @@
 
   const uploadResumeBtn = document.getElementById('upload-resume-btn');
   if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', async () => {
-    const res = await cue.pickProfileDocument();
-    if (!res || res.canceled) return;
-    if (res.error) { showStatus('Resume import failed: ' + res.error); return; }
-    $('#resume-text').value = res.text || '';
-    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+    uploadResumeBtn.textContent = 'Importing…';
+    uploadResumeBtn.disabled = true;
+    try {
+      const res = await cue.pickProfileDocument();
+      if (!res || res.canceled) return;
+      if (res.error) {
+        showToast('Import failed: ' + res.error, 4000);
+        return;
+      }
+      const textEl = $('#resume-text');
+      if (textEl) textEl.value = res.text || '';
+      const fnEl = $('#resume-filename');
+      if (fnEl) fnEl.textContent = '✓ ' + res.fileName;
+      await saveSettings();
+      showToast('Imported ' + res.fileName, 3000);
+    } catch (err) {
+      showToast('Import failed: ' + (err?.message || err), 4000);
+    } finally {
+      uploadResumeBtn.textContent = 'Import PDF/DOCX';
+      uploadResumeBtn.disabled = false;
+    }
   });
+
   const uploadJdBtn = document.getElementById('upload-jd-btn');
   if (uploadJdBtn) uploadJdBtn.addEventListener('click', async () => {
-    const res = await cue.pickProfileDocument();
-    if (!res || res.canceled) return;
-    if (res.error) { showStatus('Job description import failed: ' + res.error); return; }
-    $('#job-description').value = res.text || '';
-    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+    uploadJdBtn.textContent = 'Importing…';
+    uploadJdBtn.disabled = true;
+    try {
+      const res = await cue.pickProfileDocument();
+      if (!res || res.canceled) return;
+      if (res.error) {
+        showToast('Import failed: ' + res.error, 4000);
+        return;
+      }
+      const textEl = $('#job-description');
+      if (textEl) textEl.value = res.text || '';
+      const fnEl = $('#jd-filename');
+      if (fnEl) fnEl.textContent = '✓ ' + res.fileName;
+      await saveSettings();
+      showToast('Imported ' + res.fileName, 3000);
+    } catch (err) {
+      showToast('Import failed: ' + (err?.message || err), 4000);
+    } finally {
+      uploadJdBtn.textContent = 'Import PDF/DOCX';
+      uploadJdBtn.disabled = false;
+    }
   });
 
   function statusText() {
     const k = settings.apiKeys;
-    const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry' };
+    const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry', openrouter: 'OpenRouter' };
     const has = Object.keys(labels).filter((p) => k[p]).map((p) => labels[p]);
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
@@ -1456,6 +1684,7 @@
     document.querySelectorAll('#stt-provider-seg button').forEach((candidate) => {
       candidate.classList.toggle('on', candidate === button);
     });
+    updateSttFields();
     $('#s-status').textContent = statusText();
   }));
 
@@ -1614,9 +1843,16 @@
     settings.apiKeys.minimax = $('#key-minimax').value.trim();
     settings.apiKeys.azure = $('#key-azure').value.trim();
     settings.azureEndpoint = $('#azure-endpoint').value.trim();
+    settings.apiKeys.openrouter = $('#key-openrouter').value.trim();
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
+    // Audio device & echo gate
+    if (!settings.audio) settings.audio = {};
+    const micSelectEl = $('#audio-mic-device');
+    if (micSelectEl) settings.audio.micDeviceId = micSelectEl.value || 'default';
+    const activeGateBtn = document.querySelector('#echo-gate-seg button.on');
+    if (activeGateBtn) settings.audio.echoGate = activeGateBtn.dataset.echoGate;
     // Transcription
     if (!settings.localWhisper) settings.localWhisper = {};
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
@@ -1635,8 +1871,16 @@
     // Q&A
     settings.salaryTarget = $('#salary-target').value.trim();
     settings.questionsToAsk = $('#questions-to-ask').value.trim();
+    // Hotkeys
+    if (!settings.shortcuts) settings.shortcuts = {};
+    if ($('#shortcut-assist')) settings.shortcuts.assist = $('#shortcut-assist').value.trim();
+    if ($('#shortcut-say')) settings.shortcuts.say = $('#shortcut-say').value.trim();
+    if ($('#shortcut-leetcode')) settings.shortcuts.leetcode = $('#shortcut-leetcode').value.trim();
+    if ($('#shortcut-boss')) settings.shortcuts.boss = $('#shortcut-boss').value.trim();
+    if ($('#shortcut-quit')) settings.shortcuts.quit = $('#shortcut-quit').value.trim();
     try {
       settings = await cue.settingsSet(settings);
+      updateShortcutUIHints(settings.shortcuts);
       $('#s-status').textContent = statusText();
       updatePrepStatus();
       updateSmartTooltip();
@@ -1667,9 +1911,44 @@
 
   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
-  function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
+  let clickThroughEnabled = !isWindows;
+  function setIgnore(v) {
+    if (isWindows) {
+      if (ignoring !== false) {
+        ignoring = false;
+        cue.setIgnoreMouse(false);
+      }
+      return;
+    }
+    if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); }
+  }
+  function renderMouseButton() {
+    const mouseBtn = document.getElementById('mouse-btn');
+    if (!mouseBtn) return;
+    mouseBtn.innerHTML = icon('mouse', { size: 15, fill: !clickThroughEnabled });
+    mouseBtn.classList.toggle('off', !clickThroughEnabled);
+    // mouseBtn.title = clickThroughEnabled
+    //   ? 'Click-Through: ON (clicks on empty space pass through)'
+    //   : 'Click-Through: OFF (window captures all mouse clicks)';
+  }
+
+  const mouseBtn = document.getElementById('mouse-btn');
+  if (mouseBtn) {
+    renderMouseButton();
+    mouseBtn.addEventListener('click', () => {
+      clickThroughEnabled = !clickThroughEnabled;
+      renderMouseButton();
+      showToast(clickThroughEnabled ? 'Click-through: ON' : 'Click-through: OFF (Capturing mouse)', 2000);
+      if (!clickThroughEnabled) setIgnore(false);
+    });
+  }
+
   let mouseThrottle = null;
   document.addEventListener('mousemove', (e) => {
+    if (!clickThroughEnabled) {
+      setIgnore(false);
+      return;
+    }
     if (mouseThrottle) return;
     mouseThrottle = setTimeout(() => {
       mouseThrottle = null;
@@ -1678,7 +1957,42 @@
       setIgnore(!overUI);
     }, 30);
   });
-  setIgnore(true); // start fully click-through; hovering the panel re-enables it
+  setIgnore(false); // start interactive on all platforms
+
+  // Dynamic interactive bounding rects for seamless click-through on Windows
+  function updateInteractiveRects() {
+    const candidates = [
+      document.getElementById('toolbar'),
+      document.getElementById('panel-wrap'),
+      document.getElementById('transcript-sidebar'),
+      document.getElementById('settings'),
+      document.getElementById('onboard'),
+      document.getElementById('consent'),
+      document.getElementById('confirm-modal')?.firstElementChild
+    ];
+    const rects = [];
+    for (const el of candidates) {
+      if (!el) continue;
+      if (el.classList.contains('hidden') || el.closest('.hidden')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        // Add 8px buffer around edges so targeting near borders is smooth
+        rects.push({
+          x: Math.max(0, Math.floor(r.left - 8)),
+          y: Math.max(0, Math.floor(r.top - 8)),
+          width: Math.ceil(r.width + 16),
+          height: Math.ceil(r.height + 16)
+        });
+      }
+    }
+    if (cue.setInteractiveRects) {
+      cue.setInteractiveRects(rects);
+    }
+  }
+
+  setInterval(updateInteractiveRects, 200);
+  window.addEventListener('resize', updateInteractiveRects);
+  updateInteractiveRects();
 
   // ---- assistant access request ------------------------------------------
   // Shown here rather than as a native dialog because cue hides its dock icon:
@@ -1725,7 +2039,7 @@
   const permissionButtons = isWindows
     ? [
         { label: 'Open Microphone settings', action: () => cue.openPane('ms-settings:privacy-microphone') },
-        { label: 'Open Screen recording settings', action: () => cue.openPane('ms-settings:privacy-screenrecorder') }
+        { label: 'Open Screen recording settings', action: () => cue.openPane('ms-settings:privacy-graphicscaptureprogrammatic') }
       ]
     : [
         { label: 'Open Microphone settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone') },
@@ -1733,6 +2047,7 @@
       ];
   const assistShortcut = isWindows ? '<span class="kbd">Ctrl</span> <span class="kbd">↵</span>' : '<span class="kbd">⌘</span> <span class="kbd">↵</span>';
   const solveShortcut = isWindows ? '<span class="kbd">Ctrl</span> <span class="kbd">H</span>' : '<span class="kbd">⌘</span> <span class="kbd">H</span>';
+  const bossShortcut = isWindows ? '<span class="kbd">Ctrl</span><span class="kbd">⇧</span><span class="kbd">Z</span>' : '<span class="kbd">⌘</span><span class="kbd">⇧</span><span class="kbd">Z</span>';
   const quitShortcut = isWindows ? '<span class="kbd">Ctrl</span><span class="kbd">⇧</span><span class="kbd">X</span>' : '<span class="kbd">⌘</span><span class="kbd">⇧</span><span class="kbd">X</span>';
   const OB_STEPS = [
     {
@@ -1760,7 +2075,7 @@
     {
       icon: '✨',
       title: 'You’re all set',
-      body: 'How to use cue:<ul><li>' + assistShortcut + ' — <strong>Assist</strong> with whatever\'s on screen or being said</li><li>' + solveShortcut + ' — solve a coding problem on screen</li><li>Click <strong>▢</strong> in the top bar to start listening to a meeting</li><li>Type a question and press <span class="kbd">↵</span></li></ul>Reopen this guide anytime by clicking the <strong>cue logo</strong>. Quit with ' + quitShortcut + '.'
+      body: 'How to use cue:<ul><li>' + assistShortcut + ' — <strong>Assist</strong> with whatever\'s on screen or being said</li><li>' + solveShortcut + ' — solve a coding problem on screen</li><li>' + bossShortcut + ' — <strong>Boss key</strong> (instant emergency hide / restore)</li><li>Click <strong>▢</strong> in the top bar to start listening to a meeting</li><li>Type a question and press <span class="kbd">↵</span></li></ul>Reopen this guide anytime by clicking the <strong>cue logo</strong>. Quit with ' + quitShortcut + '.'
     }
   ];
   let obIndex = 0;
@@ -1777,9 +2092,16 @@
     $('#ob-next').textContent = obIndex === OB_STEPS.length - 1 ? 'Done' : 'Next';
     $('#ob-skip').style.visibility = obIndex === OB_STEPS.length - 1 ? 'hidden' : 'visible';
   }
-  function showOnboard() { obIndex = 0; renderOnboard(); obScrim.classList.remove('hidden'); setIgnore(false); }
+  function showOnboard() {
+    obIndex = 0;
+    renderOnboard();
+    obScrim.classList.remove('hidden');
+    if (panelWrap) panelWrap.classList.add('hidden');
+    setIgnore(false);
+  }
   async function finishOnboard() {
     obScrim.classList.add('hidden');
+    if (panelWrap) panelWrap.classList.remove('hidden');
     if (settings && !settings.onboarded) { settings.onboarded = true; await cue.settingsSet({ onboarded: true }); }
   }
   $('#ob-next').addEventListener('click', () => { if (obIndex === OB_STEPS.length - 1) finishOnboard(); else { obIndex++; renderOnboard(); } });
@@ -1791,7 +2113,7 @@
   function renderStealthButton() {
     if (!settings) return;
     const isStealth = !!settings.stealthMode;
-    $('#stealth-btn').innerHTML = icon('lightbulb', { size: 14 }) + `<span>${isStealth ? 'Stealth' : 'Visible'}</span>`;
+    $('#stealth-btn').innerHTML = `💡<span>${isStealth ? 'Stealth' : 'Visible'}</span>`;
     $('#stealth-btn').classList.toggle('off', !isStealth);
   }
   $('#stealth-btn').addEventListener('click', async () => {
@@ -1808,17 +2130,14 @@
     const platformInfo = await cue.platformInfo();
 
     // R4: shortcut hints
-    const sayHintEl = document.getElementById('say-shortcut-hint');
-    const assistHintEl = document.getElementById('assist-shortcut-hint');
-    if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';
-    if (assistHintEl) assistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
+    updateShortcutUIHints(settings.shortcuts);
 
     // R5: prep status
     updatePrepStatus();
     // R6: smart tooltip
     updateSmartTooltip();
     // Fix 3: Adjust permission buttons based on actual Windows version.
-    // ms-settings:privacy-screenrecorder only exists on Windows 11.
+    // ms-settings:privacy-graphicscaptureprogrammatic only exists on Windows 11.
     // On Windows 10, screen capture needs no permission — so replace the button
     // with a more helpful note instead of an invalid settings link.
     if (isWindows && platformInfo.winBuild > 0 && platformInfo.winBuild < 22000) {
@@ -1846,6 +2165,8 @@
 
     // Prevent default drag and drop behavior across the window (prevents file hijacking navigation)
     window.addEventListener('dragover', (e) => e.preventDefault(), false);
+    window.addEventListener('dragenter', (e) => e.preventDefault(), false);
+    window.addEventListener('dragleave', (e) => e.preventDefault(), false);
     window.addEventListener('drop', (e) => e.preventDefault(), false);
 
     // Custom HTML confirm wrapper
