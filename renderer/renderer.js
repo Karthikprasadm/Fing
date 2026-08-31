@@ -146,14 +146,32 @@
   }
 
   // ---- actions -----------------------------------------------------------
-  function runMode(mode, text) {
-    if (busy) return;
+  let activeActBtn = null;
+  function clearActiveAct() {
+    if (activeActBtn) {
+      activeActBtn.classList.remove('active-running');
+      activeActBtn = null;
+    }
+    document.querySelectorAll('.act').forEach(b => b.classList.remove('active-running'));
+  }
+
+  function runMode(mode, text, btn) {
+    clearActiveAct();
+    const targetBtn = btn || document.querySelector(`.act[data-mode="${mode}"]`);
+    if (targetBtn) {
+      targetBtn.classList.add('active-running');
+      activeActBtn = targetBtn;
+    }
     setBusy(true);
     cue.ask({ mode, text: text || '' });
   }
 
   document.querySelectorAll('.act').forEach((btn) => {
-    btn.addEventListener('click', () => runMode(btn.dataset.mode, ''));
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      runMode(btn.dataset.mode, '', btn);
+    });
   });
 
   const input = $('#input');
@@ -279,25 +297,26 @@
     updateHistoryBadge(); // FIX #14: Update badge when history changes
   }
   
-  // FIX #14: History button badge showing count
+  // History button badge showing count
   function updateHistoryBadge() {
     const historyBtn = document.getElementById('history-btn');
     if (!historyBtn) return;
     
-    // Remove existing badge if any
     let badge = historyBtn.querySelector('.history-badge');
-    
     const count = questionHistory.length;
     if (count > 0) {
+      const text = count > 9 ? '9+' : String(count);
       if (!badge) {
         badge = document.createElement('span');
         badge.className = 'history-badge';
         historyBtn.appendChild(badge);
       }
-      badge.textContent = count > 9 ? '9+' : count;
-      badge.style.display = '';
+      if (badge.textContent !== text) {
+        badge.textContent = text;
+      }
+      badge.classList.remove('hidden');
     } else if (badge) {
-      badge.style.display = 'none';
+      badge.classList.add('hidden');
     }
   }
 
@@ -516,11 +535,31 @@
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); send(); }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runMode('assist', ''); }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      if (e.shiftKey) {
+        runMode('say', '');
+      } else {
+        runMode('assist', '');
+      }
+      return;
+    }
   });
   
-  // FIX #13: Global keyboard shortcut for force-answer (Ctrl+Shift+A / Cmd+Shift+A)
+  // Keyboard shortcuts for rapid actions
   document.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+Enter / Cmd+Shift+Enter: What should I say?
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
+      e.preventDefault();
+      runMode('say', '');
+      return;
+    }
+    // Ctrl+Enter / Cmd+Enter outside input: Assist
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'Enter' && document.activeElement !== input) {
+      e.preventDefault();
+      runMode('assist', '');
+      return;
+    }
     // Ctrl+Shift+A / Cmd+Shift+A: Force answer current question immediately
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
       e.preventDefault();
@@ -853,8 +892,14 @@
   // History button toggle
   const historyBtn = document.getElementById('history-btn');
   if (historyBtn) {
-    historyBtn.innerHTML = icon('message-square-text', { size: 15 });
-    historyBtn.addEventListener('click', toggleSidebar);
+    const ic = historyBtn.querySelector('.ic');
+    if (ic) ic.innerHTML = icon('message-square-text', { size: 15 });
+    else historyBtn.innerHTML = icon('message-square-text', { size: 15 });
+    historyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleSidebar();
+    });
   }
 
   // Close sidebar button
@@ -1111,8 +1156,9 @@
     setBusy(true);
   });
   cue.on('llm:token', ({ text }) => appendToken(text));
-  cue.on('llm:done', () => { finalizeAi(); setBusy(false); });
+  cue.on('llm:done', () => { finalizeAi(); setBusy(false); clearActiveAct(); });
   cue.on('llm:error', ({ message }) => {
+    clearActiveAct();
     if (!aiEl) startAi(true);
     aiEl.dataset.raw = message; finalizeAi(); setBusy(false);
   });
@@ -1650,12 +1696,12 @@
   function statusText() {
     const k = settings.apiKeys;
     const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry', openrouter: 'OpenRouter' };
-    const has = Object.keys(labels).filter((p) => k[p]).map((p) => labels[p]);
-    // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
-    // is reported as-is so the status line matches what will actually be used.
     const selectedSttProvider = settings.sttProvider || 'auto';
-    const automaticStt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none')));
-    const stt = selectedSttProvider === 'auto' ? automaticStt : selectedSttProvider;
+    const localModelId = settings.localWhisper?.modelId || 'base.en';
+    const hasLocal = whisperOverview?.runtime?.available && whisperOverview?.models?.some((m) => m.installed);
+    const localLabel = `Local Whisper (${localModelId})`;
+    const automaticStt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (hasLocal ? localLabel : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none'))));
+    const stt = selectedSttProvider === 'auto' ? automaticStt : (selectedSttProvider === 'local' ? localLabel : selectedSttProvider);
     const ready = [
       settings.resumeText ? '✓ resume' : null,
       settings.jobDescription ? '✓ JD' : null,

@@ -18,7 +18,7 @@ const DEFAULT_MODELS = {
   groq: 'llama-3.1-8b-instant',
   minimax: 'MiniMax-M2.7',
   azure: 'gpt-4o-mini',
-  openrouter: 'meta-llama/llama-3.3-70b-instruct:free'
+  openrouter: 'openrouter/free'
 };
 
 // Gemini model ids that Google has since deprecated/retired. A settings file
@@ -339,7 +339,7 @@ function createLLM(settings) {
   }
 
   const ready = !configurationError && !!model;
-  const maxTokens = settings.smart ? 1400 : 700;
+  const maxTokens = settings.smart ? 2048 : 1024;
 
   return {
     provider, model, apiKey, baseURL,

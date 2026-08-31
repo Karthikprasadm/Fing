@@ -462,7 +462,11 @@ async function setCapturing(active) {
   if (active) {
     sttDisabled = false; // reset on re-enable
     const settings = store.getSettings();
-    if ((settings.sttProvider || 'auto') === 'local') {
+    const sttPref = settings.sttProvider || 'auto';
+    const hasCloudKeys = !!(settings.apiKeys?.deepgram || settings.apiKeys?.openai);
+    const useLocal = sttPref === 'local' || (sttPref === 'auto' && !hasCloudKeys && whisperRuntime.isAvailable());
+
+    if (useLocal) {
       try {
         await startLocalWhisper(settings);
         state.capturing = true;
@@ -518,10 +522,12 @@ async function setCapturing(active) {
 }
 
 // -------- feature runner --------
+let activeStreamSessionId = 0;
+
 async function runFeature(mode, userText) {
-  if (state.busy) return;
   const def = MODES[mode];
   if (!def) return;
+  const sessionId = ++activeStreamSessionId;
   state.busy = true;
   let streamSettled = false; // drop stray tokens from a stream we've already abandoned
   try {
@@ -542,6 +548,10 @@ async function runFeature(mode, userText) {
     let imageDataUrl = null;
     if (def.needsScreen) {
       try {
+        if (win && WIN_SUPPORTS_CONTENT_PROTECTION) {
+          // Exclude cue window from screenshot so the LLM sees ONLY the screen behind/apart from the app
+          try { win.setContentProtection(true); } catch {}
+        }
         imageDataUrl = await captureScreenshot();
         if (!imageDataUrl) throw new Error('No screen source was available.');
       }
@@ -554,15 +564,21 @@ async function runFeature(mode, userText) {
             : 'Screen capture failed. Check your desktop capture permissions, then try again.';
         send('status', { message });
       }
+      finally {
+        if (win && WIN_SUPPORTS_CONTENT_PROTECTION) {
+          try { win.setContentProtection(!!store.getSettings().stealthMode); } catch {}
+        }
+      }
     }
+
+    if (sessionId !== activeStreamSessionId) return;
 
     const settingsForPrompt = store.getSettings();
     const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript);
     const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
 
-    // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
-    // leaving state.busy = true and wedging every later question until an app restart.
+    // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever
     let watchdog = null;
     let rearm = () => { };
     const stalled = new Promise((_res, reject) => {
@@ -578,7 +594,11 @@ async function runFeature(mode, userText) {
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
-          onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); }
+          onToken: (t) => {
+            if (sessionId !== activeStreamSessionId || streamSettled) return;
+            rearm();
+            send('llm:token', { text: t });
+          }
         }),
         stalled
       ]);
@@ -586,13 +606,19 @@ async function runFeature(mode, userText) {
       streamSettled = true;
       clearTimeout(watchdog);
     }
-    send('llm:done', {});
+    if (sessionId === activeStreamSessionId) {
+      send('llm:done', {});
+    }
   } catch (e) {
-    recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
-    send('llm:error', { message: e && e.message ? e.message : String(e) });
+    if (sessionId === activeStreamSessionId) {
+      recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
+      send('llm:error', { message: e && e.message ? e.message : String(e) });
+    }
   } finally {
     streamSettled = true;
-    state.busy = false;
+    if (sessionId === activeStreamSessionId) {
+      state.busy = false;
+    }
   }
 }
 
