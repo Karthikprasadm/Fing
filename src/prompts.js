@@ -136,19 +136,33 @@ const MODES = {
     userBubble: null,
     small: false,
     resumeMode: 'ask',
-    buildSystem(contextBlock, aiRules) {
+    buildSystem(contextBlock, aiRules, extra) {
+      const hasScreen = !extra || extra.hasScreen !== false;
+      if (hasScreen) {
+        return applyRules(buildSystem(
+          'You are cue, an expert real-time AI copilot with direct vision of the user\'s screen. ' +
+          BASE_RULES +
+          'Carefully analyze the attached screenshot of the user\'s screen to answer the user\'s question or request.\n' +
+          'If the user is asking about code, a problem, text, a quiz, an interface, or anything on their screen, read it directly from the screenshot and solve or answer it completely.\n' +
+          'Direct, concise, actionable response with no preamble.',
+          contextBlock
+        ), aiRules, 'ask');
+      }
       return applyRules(buildSystem(
-        'You are cue, an expert real-time AI copilot with direct vision of the user\'s screen. ' +
+        'You are cue, an expert AI copilot. ' +
         BASE_RULES +
-        'Carefully analyze the attached screenshot of the user\'s screen to answer the user\'s question or request.\n' +
-        'If the user is asking about code, a problem, text, a quiz, an interface, or anything on their screen, read it directly from the screenshot and solve or answer it completely.\n' +
-        'Direct, concise, actionable response with no preamble.',
+        'Answer the user\'s question or request clearly, accurately, and directly based only on what they asked, without referencing any screen or background windows.\n' +
+        'Deliver the answer directly with no preamble, no greeting, and no quotes.',
         contextBlock
       ), aiRules, 'ask');
     },
-    build(ctx) {
+    build(ctx, extra) {
+      const hasScreen = !extra || extra.hasScreen !== false;
       const t = formatTranscript(ctx.transcript, 12);
-      let prompt = 'Analyze the attached screenshot of the user\'s screen to answer this request:\n\n';
+      let prompt = '';
+      if (hasScreen) {
+        prompt = 'Carefully inspect the user\'s screen in the attached screenshot to answer their request:\n\n';
+      }
       prompt += 'User Request: ' + (ctx.userText || 'Analyze what is on my screen and provide the answer/solution.');
       if (t) {
         prompt += '\n\nRecent conversation:\n' + t;

@@ -22,7 +22,16 @@ contextBridge.exposeInMainWorld('cue', {
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
   setInteractiveRects: (rects) => ipcRenderer.send('window:interactive-rects', rects),
   setFocusable: (v) => ipcRenderer.send('win:focusable', v),
+  setInputFocused: (focused) => ipcRenderer.send('input:focused', !!focused),
+  restoreForeground: () => ipcRenderer.send('win:restore-fg'),
+  dragStart: () => ipcRenderer.send('window:drag-start'),
+  dragStop: () => ipcRenderer.send('window:drag-stop'),
+  windowMoveTo: (x, y) => ipcRenderer.send('window:move-to', { x, y }),
+  windowMoveBy: (dx, dy) => ipcRenderer.send('window:move-by', { dx, dy }),
   setStealth: (v) => ipcRenderer.send('win:stealth', v),
+  setKeyhookActive: (active) => ipcRenderer.send('keyhook:active', active),
+  clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
+  clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
   clearTranscript: () => ipcRenderer.invoke('transcript:clear'),
   openPane: (url) => ipcRenderer.send('open-pane', url),
   appLinkState: () => ipcRenderer.invoke('applink:state'),
@@ -36,7 +45,7 @@ contextBridge.exposeInMainWorld('cue', {
   permissionsContinue: () => ipcRenderer.send('permissions:continue'),
   log: (msg) => ipcRenderer.send('log', msg),
   on: (channel, cb) => {
-    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'shortcuts:updated'];
+    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'shortcuts:updated', 'keyhook:char', 'keyhook:backspace', 'keyhook:submit', 'keyhook:cancel', 'keyhook:pause', 'keyhook:newline', 'keyhook:paste', 'keyhook:toggle', 'keyhook:arrow-left', 'keyhook:arrow-right', 'keyhook:home', 'keyhook:end', 'keyhook:delete', 'keyhook:select-all', 'keyhook:copy', 'keyhook:cut', 'keyhook:undo', 'keyhook:redo', 'keyhook:word-backspace', 'keyhook:word-delete', 'keyhook:word-left', 'keyhook:word-right', 'keyhook:select-left', 'keyhook:select-right', 'keyhook:select-home', 'keyhook:select-end'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }

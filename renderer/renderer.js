@@ -6,6 +6,48 @@
   const isWindows = cue.platform === 'win32';
   const isMac = cue.platform === 'darwin';
 
+  // MANDATE: Completely suppress all native hover tooltips / descriptions across the entire app
+  try {
+    const origSetAttr = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+      if (name && name.toLowerCase() === 'title') return;
+      return origSetAttr.apply(this, arguments);
+    };
+    Object.defineProperty(HTMLElement.prototype, 'title', {
+      get() { return ''; },
+      set(_v) { /* no-op: tooltips strictly forbidden */ },
+      configurable: true
+    });
+    const stripTitles = (root = document) => {
+      if (root && root.querySelectorAll) {
+        root.querySelectorAll('[title]').forEach(el => el.removeAttribute('title'));
+      }
+    };
+    stripTitles();
+    const tooltipObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.attributeName === 'title' && m.target && m.target.hasAttribute && m.target.hasAttribute('title')) {
+          m.target.removeAttribute('title');
+        } else if (m.type === 'childList') {
+          m.addedNodes.forEach(node => {
+            if (node && node.nodeType === 1) {
+              if (node.hasAttribute && node.hasAttribute('title')) node.removeAttribute('title');
+              stripTitles(node);
+            }
+          });
+        }
+      }
+    });
+    tooltipObserver.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['title']
+    });
+  } catch (err) {
+    console.error('Tooltip mandate error:', err);
+  }
+
   // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
@@ -16,6 +58,8 @@
   document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
   document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 16 });
   $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
+  if ($('#ghost-toggle .ic')) $('#ghost-toggle .ic').innerHTML = icon('ghost', { size: 14 });
+  if ($('#screen-toggle .ic')) $('#screen-toggle .ic').innerHTML = icon('monitor', { size: 14 });
   $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
   $('#send-btn').innerHTML = icon('play', { size: 15 });
   const clearIC = document.querySelector('#clear-transcript-btn .ic');
@@ -163,6 +207,9 @@
       activeActBtn = targetBtn;
     }
     setBusy(true);
+    if (text && typeof addConversationEntry === 'function') {
+      addConversationEntry(text, mode);
+    }
     cue.ask({ mode, text: text || '' });
   }
 
@@ -303,7 +350,7 @@
     if (!historyBtn) return;
     
     let badge = historyBtn.querySelector('.history-badge');
-    const count = questionHistory.length;
+    const count = (typeof conversationItems !== 'undefined' && conversationItems.length) || questionHistory.length;
     if (count > 0) {
       const text = count > 9 ? '9+' : String(count);
       if (!badge) {
@@ -453,8 +500,55 @@
     composer.classList.remove('stt-dimmed');
   }
 
+  let ghostCursorIndex = 0;
+  let ghostSelStart = -1;
+  let ghostSelEnd = -1;
+  const undoStack = [];
+  const redoStack = [];
+
+  function saveUndo() {
+    undoStack.push({ val: input.value, cursor: ghostCursorIndex });
+    if (undoStack.length > 50) undoStack.shift();
+    redoStack.length = 0;
+  }
+
+  function hasGhostSelection() {
+    return ghostSelStart >= 0 && ghostSelEnd >= 0 && ghostSelStart !== ghostSelEnd;
+  }
+
+  function getGhostSelectionBounds() {
+    if (!hasGhostSelection()) return null;
+    return {
+      start: Math.min(ghostSelStart, ghostSelEnd),
+      end: Math.max(ghostSelStart, ghostSelEnd)
+    };
+  }
+
+  function clearGhostSelection() {
+    ghostSelStart = -1;
+    ghostSelEnd = -1;
+  }
+
+  const typedBefore = $('#typed-before');
+  const typedSelection = $('#typed-selection');
+  const typedAfter = $('#typed-after');
+  const typingCaret = $('#typing-caret');
+
   function syncPlaceholder() {
-    placeholder.classList.toggle('hidden', input.value.length > 0 || document.activeElement === input);
+    ghostCursorIndex = Math.max(0, Math.min(input.value.length, ghostCursorIndex));
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      if (typedBefore) typedBefore.textContent = input.value.slice(0, sel.start);
+      if (typedSelection) typedSelection.textContent = input.value.slice(sel.start, sel.end);
+      if (typedAfter) typedAfter.textContent = input.value.slice(sel.end);
+      if (typingCaret) typingCaret.classList.add('hidden');
+    } else {
+      if (typedBefore) typedBefore.textContent = input.value.slice(0, ghostCursorIndex);
+      if (typedSelection) typedSelection.textContent = '';
+      if (typedAfter) typedAfter.textContent = input.value.slice(ghostCursorIndex);
+      if (typingCaret) typingCaret.classList.toggle('hidden', !ghostCapturing);
+    }
+    placeholder.classList.toggle('hidden', input.value.length > 0 || ghostModeOn || document.activeElement === input);
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 140) + 'px';
   }
@@ -464,6 +558,8 @@
   
   input.addEventListener('input', () => {
     const currentValue = input.value;
+    ghostCursorIndex = input.selectionStart != null ? input.selectionStart : input.value.length;
+    clearGhostSelection();
     
     // FIX #5: Clear interim text when user starts typing
     clearInputInterim();
@@ -493,9 +589,405 @@
     syncPlaceholder();
     updateSendButtonState(); // FIX #9: Update send button on input change
   });
-  input.addEventListener('focus', () => { composer.classList.add('focused'); placeholder.classList.add('hidden'); });
-  input.addEventListener('blur', () => { composer.classList.remove('focused'); syncPlaceholder(); });
-  $('#input-area').addEventListener('click', () => input.focus());
+  let ghostModeOn = false;
+  let ghostCapturing = false;
+  let composerActive = false;
+  const ghostToggleBtn = $('#ghost-toggle');
+  const isTextInput = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+
+  function activateComposerTyping() {
+    composerActive = true;
+    ghostCapturing = true;
+    composer.classList.add('focused', 'typing-mode');
+    if (ghostModeOn) {
+      composer.classList.add('ghost-capturing', 'ghost-mode-active');
+    }
+    cue.setKeyhookActive(true);
+    cue.setInputFocused(true);
+    if (ghostCursorIndex < 0 || ghostCursorIndex > input.value.length) {
+      ghostCursorIndex = input.value.length;
+    }
+    clearTimeout(softClearTimer);
+    composer.classList.remove('stt-dimmed');
+    syncPlaceholder();
+    updateSendButtonState();
+  }
+
+  function deactivateComposerTyping() {
+    if (ghostModeOn) return; // In Ghost Mode, keep capturing
+    composerActive = false;
+    ghostCapturing = false;
+    composer.classList.remove('focused', 'typing-mode', 'ghost-capturing');
+    cue.setKeyhookActive(false);
+    cue.setInputFocused(false);
+    syncPlaceholder();
+    updateSendButtonState();
+  }
+
+  function setNonFocusTyping(active) {
+    ghostModeOn = !!active;
+    composer.classList.toggle('ghost-mode-active', ghostModeOn);
+    if (ghostToggleBtn) ghostToggleBtn.classList.toggle('on', ghostModeOn);
+    if (ghostModeOn) {
+      activateComposerTyping();
+    } else {
+      deactivateComposerTyping();
+    }
+  }
+
+  function resumeGhostCapture() {
+    activateComposerTyping();
+  }
+
+  function pauseGhostCapture() {
+    deactivateComposerTyping();
+  }
+
+  $('#input-area').addEventListener('click', (e) => {
+    e.stopPropagation();
+    activateComposerTyping();
+  });
+
+  // Handle focus control:
+  // Clicking ANY element in Cue overlay NEVER shifts OS window focus from the background app!
+  // Clicking on the composer activates zero-focus keyhook typing.
+  // Clicking outside deactivates it.
+  document.addEventListener('mousedown', (e) => {
+    const target = e.target;
+    
+    // Allow native browser focus, cursor placement, text selection, and typing inside modal dialogs
+    const isModalClick = target && (typeof target.closest === 'function' && !!target.closest('#settings-scrim, #onboard-scrim, #consent-scrim, #confirm-modal'));
+    if (isModalClick) {
+      return;
+    }
+
+    // Check if clicked inside composer (input box, text area, placeholder, display, or padding)
+    const isComposerClick = target && (
+      target.id === 'composer' ||
+      target.id === 'input-area' ||
+      target.id === 'input-display' ||
+      target.id === 'placeholder' ||
+      target.id === 'input' ||
+      (typeof target.closest === 'function' && !!target.closest('#input-area, #composer'))
+    );
+    const isButtonClick = target && (typeof target.closest === 'function' && !!target.closest('button, .smart-pill, .more-btn, #send-btn, #history-btn, .act'));
+
+    // Prevent default on all clicks in Cue overlay so Cue NEVER steals OS focus from the background window!
+    e.preventDefault();
+
+    if (isComposerClick && !isButtonClick) {
+      activateComposerTyping();
+    } else if (!isComposerClick && composerActive && !ghostModeOn) {
+      deactivateComposerTyping();
+    }
+  });
+
+  if (ghostToggleBtn) {
+    ghostToggleBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
+    ghostToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setNonFocusTyping(!ghostModeOn);
+    });
+  }
+
+  cue.on('keyhook:toggle', () => {
+    if (ghostModeOn && !ghostCapturing) {
+      resumeGhostCapture();
+    } else {
+      setNonFocusTyping(!ghostModeOn);
+    }
+  });
+
+  cue.on('keyhook:char', (char) => {
+    if (!composerActive) activateComposerTyping();
+    inputFromSTT = false; // User has typed, detach STT overwrite
+    saveUndo();
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      input.value = input.value.slice(0, sel.start) + char + input.value.slice(sel.end);
+      ghostCursorIndex = sel.start + char.length;
+      clearGhostSelection();
+    } else {
+      ghostCursorIndex = Math.max(0, Math.min(input.value.length, ghostCursorIndex));
+      input.value = input.value.slice(0, ghostCursorIndex) + char + input.value.slice(ghostCursorIndex);
+      ghostCursorIndex += char.length;
+    }
+    syncPlaceholder();
+    updateSendButtonState();
+  });
+
+  cue.on('keyhook:backspace', () => {
+    saveUndo();
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      input.value = input.value.slice(0, sel.start) + input.value.slice(sel.end);
+      ghostCursorIndex = sel.start;
+      clearGhostSelection();
+      syncPlaceholder();
+      updateSendButtonState();
+      return;
+    }
+    ghostCursorIndex = Math.max(0, Math.min(input.value.length, ghostCursorIndex));
+    if (ghostCursorIndex > 0) {
+      input.value = input.value.slice(0, ghostCursorIndex - 1) + input.value.slice(ghostCursorIndex);
+      ghostCursorIndex--;
+      syncPlaceholder();
+      updateSendButtonState();
+    }
+  });
+
+  cue.on('keyhook:delete', () => {
+    saveUndo();
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      input.value = input.value.slice(0, sel.start) + input.value.slice(sel.end);
+      ghostCursorIndex = sel.start;
+      clearGhostSelection();
+      syncPlaceholder();
+      updateSendButtonState();
+      return;
+    }
+    ghostCursorIndex = Math.max(0, Math.min(input.value.length, ghostCursorIndex));
+    if (ghostCursorIndex < input.value.length) {
+      input.value = input.value.slice(0, ghostCursorIndex) + input.value.slice(ghostCursorIndex + 1);
+      syncPlaceholder();
+      updateSendButtonState();
+    }
+  });
+
+  cue.on('keyhook:word-backspace', () => {
+    saveUndo();
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      input.value = input.value.slice(0, sel.start) + input.value.slice(sel.end);
+      ghostCursorIndex = sel.start;
+      clearGhostSelection();
+    } else if (ghostCursorIndex > 0) {
+      const before = input.value.slice(0, ghostCursorIndex);
+      const match = before.match(/\s*\S+$/) || before.match(/\s+$/);
+      const delCount = match ? match[0].length : 1;
+      input.value = before.slice(0, -delCount) + input.value.slice(ghostCursorIndex);
+      ghostCursorIndex -= delCount;
+    }
+    syncPlaceholder();
+    updateSendButtonState();
+  });
+
+  cue.on('keyhook:word-delete', () => {
+    saveUndo();
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      input.value = input.value.slice(0, sel.start) + input.value.slice(sel.end);
+      ghostCursorIndex = sel.start;
+      clearGhostSelection();
+    } else if (ghostCursorIndex < input.value.length) {
+      const after = input.value.slice(ghostCursorIndex);
+      const match = after.match(/^\S+\s*/) || after.match(/^\s+/);
+      const delCount = match ? match[0].length : 1;
+      input.value = input.value.slice(0, ghostCursorIndex) + after.slice(delCount);
+    }
+    syncPlaceholder();
+    updateSendButtonState();
+  });
+
+  cue.on('keyhook:word-left', () => {
+    clearGhostSelection();
+    const before = input.value.slice(0, ghostCursorIndex);
+    const match = before.match(/\s*\S+$/) || before.match(/\s+$/);
+    if (match) {
+      ghostCursorIndex -= match[0].length;
+    } else {
+      ghostCursorIndex = 0;
+    }
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:word-right', () => {
+    clearGhostSelection();
+    const after = input.value.slice(ghostCursorIndex);
+    const match = after.match(/^\S+\s*/) || after.match(/^\s+/);
+    if (match) {
+      ghostCursorIndex += match[0].length;
+    } else {
+      ghostCursorIndex = input.value.length;
+    }
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:select-all', () => {
+    ghostSelStart = 0;
+    ghostSelEnd = input.value.length;
+    ghostCursorIndex = input.value.length;
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:select-left', () => {
+    if (!hasGhostSelection()) {
+      ghostSelStart = ghostCursorIndex;
+      ghostSelEnd = ghostCursorIndex;
+    }
+    ghostCursorIndex = Math.max(0, ghostCursorIndex - 1);
+    ghostSelEnd = ghostCursorIndex;
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:select-right', () => {
+    if (!hasGhostSelection()) {
+      ghostSelStart = ghostCursorIndex;
+      ghostSelEnd = ghostCursorIndex;
+    }
+    ghostCursorIndex = Math.min(input.value.length, ghostCursorIndex + 1);
+    ghostSelEnd = ghostCursorIndex;
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:select-home', () => {
+    if (!hasGhostSelection()) {
+      ghostSelStart = ghostCursorIndex;
+    }
+    ghostCursorIndex = 0;
+    ghostSelEnd = 0;
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:select-end', () => {
+    if (!hasGhostSelection()) {
+      ghostSelStart = ghostCursorIndex;
+    }
+    ghostCursorIndex = input.value.length;
+    ghostSelEnd = input.value.length;
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:arrow-left', () => {
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      ghostCursorIndex = sel.start;
+      clearGhostSelection();
+    } else if (ghostCursorIndex > 0) {
+      ghostCursorIndex--;
+    }
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:arrow-right', () => {
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      ghostCursorIndex = sel.end;
+      clearGhostSelection();
+    } else if (ghostCursorIndex < input.value.length) {
+      ghostCursorIndex++;
+    }
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:home', () => {
+    clearGhostSelection();
+    ghostCursorIndex = 0;
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:end', () => {
+    clearGhostSelection();
+    ghostCursorIndex = input.value.length;
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:newline', () => {
+    saveUndo();
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      input.value = input.value.slice(0, sel.start) + '\n' + input.value.slice(sel.end);
+      ghostCursorIndex = sel.start + 1;
+      clearGhostSelection();
+    } else {
+      ghostCursorIndex = Math.max(0, Math.min(input.value.length, ghostCursorIndex));
+      input.value = input.value.slice(0, ghostCursorIndex) + '\n' + input.value.slice(ghostCursorIndex);
+      ghostCursorIndex++;
+    }
+    syncPlaceholder();
+  });
+
+  cue.on('keyhook:copy', async () => {
+    const sel = getGhostSelectionBounds();
+    const text = sel ? input.value.slice(sel.start, sel.end) : input.value;
+    if (text) {
+      cue.clipboardWrite(text);
+    }
+  });
+
+  cue.on('keyhook:cut', async () => {
+    const sel = getGhostSelectionBounds();
+    if (sel) {
+      saveUndo();
+      const text = input.value.slice(sel.start, sel.end);
+      cue.clipboardWrite(text);
+      input.value = input.value.slice(0, sel.start) + input.value.slice(sel.end);
+      ghostCursorIndex = sel.start;
+      clearGhostSelection();
+      syncPlaceholder();
+      updateSendButtonState();
+    }
+  });
+
+  cue.on('keyhook:paste', async () => {
+    try {
+      const text = await cue.clipboardRead();
+      if (text) {
+        saveUndo();
+        const sel = getGhostSelectionBounds();
+        if (sel) {
+          input.value = input.value.slice(0, sel.start) + text + input.value.slice(sel.end);
+          ghostCursorIndex = sel.start + text.length;
+          clearGhostSelection();
+        } else {
+          ghostCursorIndex = Math.max(0, Math.min(input.value.length, ghostCursorIndex));
+          input.value = input.value.slice(0, ghostCursorIndex) + text + input.value.slice(ghostCursorIndex);
+          ghostCursorIndex += text.length;
+        }
+        syncPlaceholder();
+        updateSendButtonState();
+      }
+    } catch {}
+  });
+
+  cue.on('keyhook:undo', () => {
+    if (undoStack.length > 0) {
+      redoStack.push({ val: input.value, cursor: ghostCursorIndex });
+      const prev = undoStack.pop();
+      input.value = prev.val;
+      ghostCursorIndex = prev.cursor;
+      clearGhostSelection();
+      syncPlaceholder();
+      updateSendButtonState();
+    }
+  });
+
+  cue.on('keyhook:redo', () => {
+    if (redoStack.length > 0) {
+      undoStack.push({ val: input.value, cursor: ghostCursorIndex });
+      const next = redoStack.pop();
+      input.value = next.val;
+      ghostCursorIndex = next.cursor;
+      clearGhostSelection();
+      syncPlaceholder();
+      updateSendButtonState();
+    }
+  });
+
+  cue.on('keyhook:submit', () => {
+    send();
+  });
+
+  cue.on('keyhook:pause', () => {
+    pauseGhostCapture();
+  });
+
+  cue.on('keyhook:cancel', () => {
+    pauseGhostCapture();
+  });
 
   function send() {
     const text = input.value.trim();
@@ -504,6 +996,9 @@
     
     // Save to history before clearing (in case user wants to redo)
     saveToQuestionHistory(text);
+    if (typeof addConversationEntry === 'function') {
+      addConversationEntry(text, wasFromSTT ? 'answerThis' : 'ask');
+    }
     
     input.value = '';
     inputFromSTT = false;
@@ -515,6 +1010,9 @@
     clearTimeout(sttFillTimer);
     syncPlaceholder();
     updateSendButtonState(); // FIX #9
+    if (!ghostModeOn) {
+      deactivateComposerTyping();
+    }
     
     // If text came from STT (interviewer question), use answerThis mode
     // Otherwise use ask mode (user typed their own question)
@@ -548,6 +1046,10 @@
   
   // Keyboard shortcuts for rapid actions
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'F1') {
+      e.preventDefault();
+      return;
+    }
     // Ctrl+Shift+Enter / Cmd+Shift+Enter: What should I say?
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
       e.preventDefault();
@@ -589,6 +1091,16 @@
     await cue.settingsSet({ smart: settings.smart });
   });
 
+  // Screen Vision toggle
+  const screenBtn = $('#screen-toggle');
+  if (screenBtn) {
+    screenBtn.addEventListener('click', async () => {
+      settings.screenVision = !settings.screenVision;
+      screenBtn.classList.toggle('on', settings.screenVision);
+      await cue.settingsSet({ screenVision: settings.screenVision });
+    });
+  }
+
   // Hide / collapse
   function toggleHide() {
     const collapsed = $('#panel').classList.toggle('collapsed');
@@ -626,9 +1138,9 @@
       if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
       // FIX #1: Use ts-list instead of non-existent transcript-list
       const list = document.getElementById('ts-list');
-      if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
+      if (list) list.innerHTML = '<div class="ts-placeholder">Live transcript will appear here when listening.</div>';
       transcriptInterimEl = null;
-      clearTranscriptSidebar(); // clear the history sidebar too
+      clearTranscriptSidebar(); // clear the transcript sidebar too
       hardClearSTTFill(); // clear the input box too
       
       const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
@@ -846,15 +1358,192 @@
     label.className = 'stt-status stt-' + sttState;
   }
 
-  // ---- transcript history sidebar (hidden by default, manual toggle) ----
+  // ---- conversation history sidebar (toggled by history button) ----
   let tsSidebarInterimEl = null;
   let sidebarOpen = false;
-  // Track last committed row per channel — all chunks from same speaker go in one row
   const tsLastRow = { you: null, them: null };
   const tsRowTimer = { you: null, them: null };
-  const TS_SENTENCE_GAP_MS = 10000; // 10s silence = new row
+  const TS_SENTENCE_GAP_MS = 10000;
 
-  function showSidebar() {
+  // Session-only Conversation History storage: starts fresh on every app session
+  let conversationItems = [];
+  try {
+    localStorage.removeItem('cue_conversation_history');
+  } catch {}
+
+  function saveConversationItems() {
+    updateHistoryBadge();
+    updateHistorySidebarBadge();
+  }
+
+  function updateHistorySidebarBadge() {
+    const qBadge = document.getElementById('ts-badge-history');
+    if (qBadge) {
+      const count = conversationItems.length;
+      if (count > 0) {
+        qBadge.textContent = count > 99 ? '99+' : String(count);
+        qBadge.classList.remove('hidden');
+      } else {
+        qBadge.classList.add('hidden');
+      }
+    }
+  }
+
+  let transcriptTurnCount = 0;
+
+  function updateTranscriptBadge() {
+    const tBadge = document.getElementById('ts-badge-transcript');
+    if (tBadge) {
+      if (transcriptTurnCount > 0) {
+        tBadge.textContent = transcriptTurnCount > 99 ? '99+' : String(transcriptTurnCount);
+        tBadge.classList.remove('hidden');
+      } else {
+        tBadge.classList.add('hidden');
+      }
+    }
+  }
+
+  // Generate a concise, single-line summary of any user query (barely a line)
+  function formatHistorySummary(raw) {
+    if (!raw || !raw.trim()) return 'General Query';
+    let s = raw.trim();
+
+    // Screen / screenshot detection
+    if (/\b(what('?s| is) (on|in) my screen|whats on my screen|whats in my screen|analyze my screen|look at my screen|screen|screenshot)\b/i.test(s)) {
+      if (s.length < 32 || /^(what('?s| is) (on|in) (my )?screen|whats on my screen|see this)/i.test(s)) {
+        return 'Screen inspection';
+      }
+    }
+
+    // Strip leading conversational greetings & polite wrappers
+    s = s.replace(/^(hi|hello|hey|cue|please|can you|could you|would you|help me|tell me|i want to know|i need)\b[\s,]*/i, '');
+    
+    // Strip common question starters
+    s = s.replace(/^(what (is|are|was|were)|how (do|to|can|should)|give me (a |the )?(code|example|summary) for|write (a |the )?(code|function|program) for|explain (to me )?(about )?|describe|about|regarding)\b[\s,]*/i, '');
+
+    // If compound sentence like: "hierarchy in python, give me a code for hierarchy with a bank account..."
+    const parts = s.split(/[,;\n]/);
+    if (parts.length > 1 && parts[0].trim().length >= 4) {
+      s = parts[0].trim();
+    }
+
+    // Clean up trailing prepositions or conjunctions
+    s = s.replace(/\s+(with|and|for|in|about|using|of)\s*$/i, '').trim();
+
+    if (s.length > 0) {
+      s = s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // Strictly enforce a concise single line (~35 chars max)
+    if (s.length > 36) {
+      s = s.slice(0, 33).trim() + '...';
+    }
+
+    return s || 'General Query';
+  }
+
+  function renderConversationHistory() {
+    const list = document.getElementById('ts-history-list');
+    if (!list) return;
+
+    list.innerHTML = '';
+    if (conversationItems.length === 0) {
+      list.innerHTML = '<div class="ts-placeholder">No question history yet.</div>';
+      updateHistorySidebarBadge();
+      return;
+    }
+
+    conversationItems.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'ts-item';
+      row.dataset.id = item.id;
+
+      const dot = document.createElement('span');
+      dot.className = 'ts-item-dot';
+
+      const title = document.createElement('span');
+      title.className = 'ts-item-title';
+      title.textContent = item.title;
+
+      const time = document.createElement('span');
+      time.className = 'ts-item-time';
+      time.textContent = item.time || '';
+
+      row.appendChild(dot);
+      row.appendChild(title);
+      row.appendChild(time);
+
+      row.addEventListener('click', () => {
+        if (item.query) {
+          input.value = item.query;
+          syncPlaceholder();
+          updateSendButtonState();
+        }
+      });
+
+      list.appendChild(row);
+    });
+
+    list.scrollTop = list.scrollHeight;
+    updateHistorySidebarBadge();
+  }
+
+  function addConversationEntry(query, mode = 'ask') {
+    if (!query || !query.trim()) return;
+    const cleanQuery = query.trim();
+    const title = formatHistorySummary(cleanQuery);
+    const now = new Date();
+    const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Don't add rapid duplicates
+    const last = conversationItems[conversationItems.length - 1];
+    if (last && last.query === cleanQuery) return;
+
+    conversationItems.push({
+      id: 'c_' + Date.now(),
+      title,
+      query: cleanQuery,
+      mode,
+      time,
+      timestamp: Date.now()
+    });
+
+    if (conversationItems.length > 50) conversationItems.shift();
+    saveConversationItems();
+    renderConversationHistory();
+  }
+
+  let currentSidebarTab = 'history'; // 'history' | 'transcript'
+
+  function switchSidebarTab(tab) {
+    currentSidebarTab = tab;
+    const tabHistory = document.getElementById('ts-tab-history');
+    const tabTranscript = document.getElementById('ts-tab-transcript');
+    const viewHistory = document.getElementById('ts-history-view');
+    const viewTranscript = document.getElementById('ts-transcript-view');
+
+    if (tab === 'transcript') {
+      if (tabHistory) tabHistory.classList.remove('on');
+      if (tabTranscript) tabTranscript.classList.add('on');
+      if (viewHistory) viewHistory.classList.add('hidden');
+      if (viewTranscript) viewTranscript.classList.remove('hidden');
+      const tsList = document.getElementById('ts-list');
+      if (tsList) {
+        requestAnimationFrame(() => { tsList.scrollTop = tsList.scrollHeight; });
+      }
+    } else {
+      if (tabHistory) tabHistory.classList.add('on');
+      if (tabTranscript) tabTranscript.classList.remove('on');
+      if (viewHistory) viewHistory.classList.remove('hidden');
+      if (viewTranscript) viewTranscript.classList.add('hidden');
+      const histList = document.getElementById('ts-history-list');
+      if (histList) {
+        requestAnimationFrame(() => { histList.scrollTop = histList.scrollHeight; });
+      }
+    }
+  }
+
+  function showSidebar(tab) {
     const sidebar = document.getElementById('transcript-sidebar');
     const historyBtn = document.getElementById('history-btn');
     if (sidebar) sidebar.classList.remove('hidden');
@@ -862,6 +1551,18 @@
     const panelWrap = document.getElementById('panel-wrap');
     if (panelWrap) panelWrap.classList.add('sidebar-open');
     sidebarOpen = true;
+    if (tab) {
+      switchSidebarTab(tab);
+    }
+    renderConversationHistory();
+    const activeList = currentSidebarTab === 'transcript'
+      ? document.getElementById('ts-list')
+      : document.getElementById('ts-history-list');
+    if (activeList) {
+      requestAnimationFrame(() => {
+        activeList.scrollTop = activeList.scrollHeight;
+      });
+    }
   }
 
   function hideSidebar() {
@@ -879,13 +1580,6 @@
       hideSidebar();
     } else {
       showSidebar();
-      // FIX #7: Scroll to bottom when opening sidebar
-      const list = document.getElementById('ts-list');
-      if (list) {
-        requestAnimationFrame(() => {
-          list.scrollTop = list.scrollHeight;
-        });
-      }
     }
   }
 
@@ -912,16 +1606,46 @@
     });
   }
 
+  // Sidebar tab buttons
+  const tabHistoryBtn = document.getElementById('ts-tab-history');
+  if (tabHistoryBtn) {
+    tabHistoryBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      switchSidebarTab('history');
+    });
+  }
+
+  const tabTranscriptBtn = document.getElementById('ts-tab-transcript');
+  if (tabTranscriptBtn) {
+    tabTranscriptBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      switchSidebarTab('transcript');
+    });
+  }
+
+  // Clear question history button
+  const clearHistoryBtn = document.getElementById('clear-history-btn');
+  if (clearHistoryBtn) {
+    clearHistoryBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      conversationItems = [];
+      saveConversationItems();
+      renderConversationHistory();
+      showToast('Question history cleared', 2000);
+    });
+  }
+
   function appendTranscriptHistoryTurn(channel, text, isInterim) {
     const list = document.getElementById('ts-list');
     if (!list) return;
 
-    // Remove placeholder on first real turn
     const ph = list.querySelector('.ts-placeholder');
     if (ph) ph.remove();
 
     if (isInterim) {
-      // Update the single floating interim row
       if (!tsSidebarInterimEl) {
         tsSidebarInterimEl = document.createElement('div');
         tsSidebarInterimEl.className = 'ts-turn ts-' + channel + ' ts-interim-row';
@@ -936,20 +1660,17 @@
       }
       tsSidebarInterimEl.querySelector('.ts-text').textContent = text;
     } else {
-      // Remove interim row
       if (tsSidebarInterimEl) { tsSidebarInterimEl.remove(); tsSidebarInterimEl = null; }
 
       const existingRow = tsLastRow[channel];
       const useExisting = existingRow && existingRow.isConnected;
 
       if (useExisting) {
-        // Append to existing row — accumulates sentence fragments
         const txt = existingRow.querySelector('.ts-text');
         if (txt) {
           txt.textContent = txt.textContent ? txt.textContent + ' ' + text : text;
         }
       } else {
-        // Start a new row (no buttons — just clean history view)
         const row = document.createElement('div');
         row.className = 'ts-turn ts-' + channel;
 
@@ -965,13 +1686,13 @@
         row.appendChild(txt);
         list.appendChild(row);
         tsLastRow[channel] = row;
+        transcriptTurnCount++;
+        updateTranscriptBadge();
       }
 
-      // Reset silence timer
       clearTimeout(tsRowTimer[channel]);
       tsRowTimer[channel] = setTimeout(() => { tsLastRow[channel] = null; }, TS_SENTENCE_GAP_MS);
 
-      // When THIS channel speaks, reset the OTHER channel's row
       const other = channel === 'you' ? 'them' : 'you';
       clearTimeout(tsRowTimer[other]);
       tsLastRow[other] = null;
@@ -981,12 +1702,20 @@
   }
 
   function clearTranscriptSidebar() {
-    const list = document.getElementById('ts-list');
-    if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
     tsSidebarInterimEl = null;
     tsLastRow.you = null; tsLastRow.them = null;
     clearTimeout(tsRowTimer.you); clearTimeout(tsRowTimer.them);
+    transcriptTurnCount = 0;
+    updateTranscriptBadge();
+    const list = document.getElementById('ts-list');
+    if (list) list.innerHTML = '<div class="ts-placeholder">Live transcript will appear here when listening.</div>';
   }
+
+  // Initial render on boot
+  renderConversationHistory();
+  updateHistoryBadge();
+  updateHistorySidebarBadge();
+  updateTranscriptBadge();
 
   // ---- events from main --------------------------------------------------
   cue.on('capture:state', ({ active, streaming, mode }) => {
@@ -1134,6 +1863,9 @@
       b.className = 'user-bubble';
       b.textContent = userBubble;
       group.appendChild(b);
+      if (typeof addConversationEntry === 'function') {
+        addConversationEntry(userBubble.replace(/^"(.*)"$/, '$1'), 'ask');
+      }
     }
     if (category) {
       const pill = document.createElement('div');
@@ -1285,15 +2017,19 @@
   const scrim = $('#settings-scrim');
   const panelWrap = $('#panel-wrap');
   function openSettings() {
+    pauseGhostCapture();
     fillSettings();
     scrim.classList.remove('hidden');
     if (panelWrap) panelWrap.classList.add('hidden');
     refreshWhisperModels();
+    cue.setFocusable(true);
   }
   async function closeSettings() {
     if (await saveSettings()) {
       scrim.classList.add('hidden');
       if (panelWrap) panelWrap.classList.remove('hidden');
+      cue.setFocusable(false);
+      if (ghostModeOn) resumeGhostCapture();
     }
   }
   $('#more-btn').addEventListener('click', openSettings);
@@ -1490,11 +2226,22 @@
     const s = sc || (settings && settings.shortcuts) || {};
     const assistAccel = s.assist || 'CommandOrControl+Return';
     const sayAccel = s.say || 'CommandOrControl+Shift+Return';
+    const hideAccel = s.hide || 'CommandOrControl+Shift+/';
+    const typeAccel = s.type || 'CommandOrControl+Shift+K';
 
     const sayHintEl = document.getElementById('say-shortcut-hint');
     const assistHintEl = document.getElementById('assist-shortcut-hint');
     if (sayHintEl) sayHintEl.textContent = formatAccelerator(sayAccel);
     if (assistHintEl) assistHintEl.textContent = formatAccelerator(assistAccel);
+
+    const hideBtn = document.getElementById('hide-btn');
+    if (hideBtn) {
+      hideBtn.title = `Collapse / expand overlay (${formatAccelerator(hideAccel)})`;
+    }
+    const ghostToggleBtn = document.getElementById('ghost-toggle');
+    if (ghostToggleBtn) {
+      ghostToggleBtn.title = `Toggle Ghost Typing (${formatAccelerator(typeAccel)})`;
+    }
 
     if (placeholder) {
       placeholder.innerHTML = `Ask about your screen or conversation, or <span class="keycap">${formatAccelerator(assistAccel)}</span> for Assist`;
@@ -1507,12 +2254,16 @@
       assist: 'CommandOrControl+Return',
       say: 'CommandOrControl+Shift+Return',
       leetcode: 'CommandOrControl+H',
+      hide: 'CommandOrControl+Shift+/',
+      type: 'CommandOrControl+Shift+K',
       boss: 'CommandOrControl+Shift+Z',
       quit: 'CommandOrControl+Shift+X'
     };
     if ($('#shortcut-assist')) $('#shortcut-assist').value = sc.assist || defs.assist;
     if ($('#shortcut-say')) $('#shortcut-say').value = sc.say || defs.say;
     if ($('#shortcut-leetcode')) $('#shortcut-leetcode').value = sc.leetcode || defs.leetcode;
+    if ($('#shortcut-hide')) $('#shortcut-hide').value = sc.hide || defs.hide;
+    if ($('#shortcut-type')) $('#shortcut-type').value = sc.type || defs.type;
     if ($('#shortcut-boss')) $('#shortcut-boss').value = sc.boss || defs.boss;
     if ($('#shortcut-quit')) $('#shortcut-quit').value = sc.quit || defs.quit;
 
@@ -1592,6 +2343,26 @@
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
     $('#job-description').value = settings.jobDescription || '';
+    const resumeFnEl = $('#resume-filename');
+    if (resumeFnEl) {
+      if (settings.resumeFileName && settings.resumeText) {
+        resumeFnEl.textContent = '✓ ' + settings.resumeFileName;
+      } else if (settings.resumeText) {
+        resumeFnEl.textContent = '✓ Saved (' + settings.resumeText.length + ' chars)';
+      } else {
+        resumeFnEl.textContent = '';
+      }
+    }
+    const jdFnEl = $('#jd-filename');
+    if (jdFnEl) {
+      if (settings.jdFileName && settings.jobDescription) {
+        jdFnEl.textContent = '✓ ' + settings.jdFileName;
+      } else if (settings.jobDescription) {
+        jdFnEl.textContent = '✓ Saved (' + settings.jobDescription.length + ' chars)';
+      } else {
+        jdFnEl.textContent = '';
+      }
+    }
     // Interview Prep tab
     $('#star-stories').value = settings.starStories || '';
     $('#why-company').value = settings.whyCompany || '';
@@ -1651,17 +2422,30 @@
       const res = await cue.pickProfileDocument();
       if (!res || res.canceled) return;
       if (res.error) {
-        showToast('Import failed: ' + res.error, 4000);
+        showToast('Import failed: ' + res.error, 5000);
+        return;
+      }
+      const extractedText = (res.text || '').trim();
+      if (!extractedText) {
+        showToast('No readable text found in ' + res.fileName + '. If this is an image/scan, paste the text directly.', 5000);
+        const fnEl = $('#resume-filename');
+        if (fnEl) fnEl.textContent = '⚠ ' + res.fileName + ' (no text)';
         return;
       }
       const textEl = $('#resume-text');
-      if (textEl) textEl.value = res.text || '';
+      if (textEl) {
+        textEl.value = extractedText;
+        textEl.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       const fnEl = $('#resume-filename');
       if (fnEl) fnEl.textContent = '✓ ' + res.fileName;
+      settings.resumeText = extractedText;
+      settings.resumeFileName = res.fileName;
       await saveSettings();
-      showToast('Imported ' + res.fileName, 3000);
+      updatePrepStatus();
+      showToast('Imported ' + res.fileName + ' (' + extractedText.length + ' chars)', 3000);
     } catch (err) {
-      showToast('Import failed: ' + (err?.message || err), 4000);
+      showToast('Import failed: ' + (err?.message || err), 5000);
     } finally {
       uploadResumeBtn.textContent = 'Import PDF/DOCX';
       uploadResumeBtn.disabled = false;
@@ -1676,22 +2460,61 @@
       const res = await cue.pickProfileDocument();
       if (!res || res.canceled) return;
       if (res.error) {
-        showToast('Import failed: ' + res.error, 4000);
+        showToast('Import failed: ' + res.error, 5000);
+        return;
+      }
+      const extractedText = (res.text || '').trim();
+      if (!extractedText) {
+        showToast('No readable text found in ' + res.fileName + '.', 5000);
+        const fnEl = $('#jd-filename');
+        if (fnEl) fnEl.textContent = '⚠ ' + res.fileName + ' (no text)';
         return;
       }
       const textEl = $('#job-description');
-      if (textEl) textEl.value = res.text || '';
+      if (textEl) {
+        textEl.value = extractedText;
+        textEl.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       const fnEl = $('#jd-filename');
       if (fnEl) fnEl.textContent = '✓ ' + res.fileName;
+      settings.jobDescription = extractedText;
+      settings.jdFileName = res.fileName;
       await saveSettings();
-      showToast('Imported ' + res.fileName, 3000);
+      updatePrepStatus();
+      showToast('Imported ' + res.fileName + ' (' + extractedText.length + ' chars)', 3000);
     } catch (err) {
-      showToast('Import failed: ' + (err?.message || err), 4000);
+      showToast('Import failed: ' + (err?.message || err), 5000);
     } finally {
       uploadJdBtn.textContent = 'Import PDF/DOCX';
       uploadJdBtn.disabled = false;
     }
   });
+
+  const resumeTextarea = document.getElementById('resume-text');
+  if (resumeTextarea) {
+    resumeTextarea.addEventListener('input', () => {
+      settings.resumeText = resumeTextarea.value.trim();
+      if (!settings.resumeText) {
+        settings.resumeFileName = '';
+        const fnEl = $('#resume-filename');
+        if (fnEl) fnEl.textContent = '';
+      }
+      updatePrepStatus();
+    });
+  }
+
+  const jdTextarea = document.getElementById('job-description');
+  if (jdTextarea) {
+    jdTextarea.addEventListener('input', () => {
+      settings.jobDescription = jdTextarea.value.trim();
+      if (!settings.jobDescription) {
+        settings.jdFileName = '';
+        const fnEl = $('#jd-filename');
+        if (fnEl) fnEl.textContent = '';
+      }
+      updatePrepStatus();
+    });
+  }
 
   function statusText() {
     const k = settings.apiKeys;
@@ -1907,6 +2730,8 @@
     // Profile
     settings.resumeText = $('#resume-text').value.trim();
     settings.jobDescription = $('#job-description').value.trim();
+    if (!settings.resumeText) settings.resumeFileName = '';
+    if (!settings.jobDescription) settings.jdFileName = '';
     // Interview Prep
     settings.starStories = $('#star-stories').value.trim();
     settings.whyCompany = $('#why-company').value.trim();
@@ -1922,6 +2747,8 @@
     if ($('#shortcut-assist')) settings.shortcuts.assist = $('#shortcut-assist').value.trim();
     if ($('#shortcut-say')) settings.shortcuts.say = $('#shortcut-say').value.trim();
     if ($('#shortcut-leetcode')) settings.shortcuts.leetcode = $('#shortcut-leetcode').value.trim();
+    if ($('#shortcut-hide')) settings.shortcuts.hide = $('#shortcut-hide').value.trim();
+    if ($('#shortcut-type')) settings.shortcuts.type = $('#shortcut-type').value.trim();
     if ($('#shortcut-boss')) settings.shortcuts.boss = $('#shortcut-boss').value.trim();
     if ($('#shortcut-quit')) settings.shortcuts.quit = $('#shortcut-quit').value.trim();
     try {
@@ -1987,6 +2814,26 @@
       showToast(clickThroughEnabled ? 'Click-through: ON' : 'Click-through: OFF (Capturing mouse)', 2000);
       if (!clickThroughEnabled) setIgnore(false);
     });
+  }
+
+  // ---- stealth window dragging: silky-smooth OS-level tracking with zero focus shift ----
+  const dragPill = document.querySelector('.drag-pill');
+  if (dragPill) {
+    dragPill.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // left click only
+      try { dragPill.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
+      cue.dragStart();
+    });
+
+    const stopDrag = (e) => {
+      try { dragPill.releasePointerCapture(e.pointerId); } catch {}
+      cue.dragStop();
+    };
+
+    dragPill.addEventListener('pointerup', stopDrag);
+    dragPill.addEventListener('pointercancel', stopDrag);
+    window.addEventListener('pointerup', () => cue.dragStop());
   }
 
   let mouseThrottle = null;
@@ -2065,16 +2912,22 @@
     // Do not wait for a mousemove to turn the mouse back on: the pointer may
     // already be still, and the sheet would be unclickable until it moved.
     setIgnore(false);
+    cue.setFocusable(true);
     $('#cs-deny').focus();
   });
 
-  $('#cs-allow').addEventListener('click', () => answerConsent(true));
-  $('#cs-deny').addEventListener('click', () => answerConsent(false));
+  const finishConsent = (allowed) => {
+    answerConsent(allowed);
+    cue.setFocusable(false);
+    if (ghostModeOn) resumeGhostCapture();
+  };
+  $('#cs-allow').addEventListener('click', () => finishConsent(true));
+  $('#cs-deny').addEventListener('click', () => finishConsent(false));
   // Anything other than a deliberate Allow is a no, including Escape and
   // clicking away.
-  consentScrim.addEventListener('click', (e) => { if (e.target === consentScrim) answerConsent(false); });
+  consentScrim.addEventListener('click', (e) => { if (e.target === consentScrim) finishConsent(false); });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && pendingConsentId) { e.preventDefault(); answerConsent(false); }
+    if (e.key === 'Escape' && pendingConsentId) { e.preventDefault(); finishConsent(false); }
   });
 
   // ---- onboarding / first-run tutorial -----------------------------------
@@ -2139,16 +2992,20 @@
     $('#ob-skip').style.visibility = obIndex === OB_STEPS.length - 1 ? 'hidden' : 'visible';
   }
   function showOnboard() {
+    pauseGhostCapture();
     obIndex = 0;
     renderOnboard();
     obScrim.classList.remove('hidden');
     if (panelWrap) panelWrap.classList.add('hidden');
     setIgnore(false);
+    cue.setFocusable(true);
   }
   async function finishOnboard() {
     obScrim.classList.add('hidden');
     if (panelWrap) panelWrap.classList.remove('hidden');
     if (settings && !settings.onboarded) { settings.onboarded = true; await cue.settingsSet({ onboarded: true }); }
+    cue.setFocusable(false);
+    if (ghostModeOn) resumeGhostCapture();
   }
   $('#ob-next').addEventListener('click', () => { if (obIndex === OB_STEPS.length - 1) finishOnboard(); else { obIndex++; renderOnboard(); } });
   $('#ob-back').addEventListener('click', () => { if (obIndex > 0) { obIndex--; renderOnboard(); } });
@@ -2194,6 +3051,7 @@
     }
 
     smartBtn.classList.toggle('on', !!settings.smart);
+    if (screenBtn) screenBtn.classList.toggle('on', !!settings.screenVision);
     showExample();
     syncPlaceholder();
     updateHistoryBadge(); // FIX #3: Initialize badge on boot
@@ -2228,11 +3086,14 @@
         }
         text.textContent = message;
         modal.classList.remove('hidden');
+        cue.setFocusable(true);
         
         const cleanup = (val) => {
           modal.classList.add('hidden');
           yesBtn.onclick = null;
           noBtn.onclick = null;
+          cue.setFocusable(false);
+          if (ghostModeOn) resumeGhostCapture();
           resolve(val);
         };
         

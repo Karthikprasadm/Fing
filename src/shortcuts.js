@@ -7,6 +7,7 @@ const DEFAULTS = {
   leetcode: 'CommandOrControl+H',
   boss: 'CommandOrControl+Shift+Z',
   hide: 'CommandOrControl+Shift+/',
+  type: 'CommandOrControl+Shift+K',
   quit: 'CommandOrControl+Shift+X'
 };
 

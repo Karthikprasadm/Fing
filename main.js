@@ -1,6 +1,8 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences, clipboard } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
+const { spawn } = require('child_process');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
@@ -21,6 +23,9 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection in Main Process at:', promise, 'reason:', reason);
 });
+
+// Set distinct AppUserModelId so Windows Shell never associates or groups Cue with Microsoft Edge
+app.setAppUserModelId('System.Overlay.Host');
 
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
 // start on Electron 31–38 unless these Chromium features are enabled; without
@@ -190,6 +195,8 @@ async function getWhisperOverview() {
 }
 
 // -------- window --------
+let isGhostModeActive = false;
+let isInputFocused = false;
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
   const W = 700, H = 600;
@@ -217,7 +224,7 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
-    focusable: true,
+    focusable: false,
     show: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -226,12 +233,6 @@ function createWindow() {
       sandbox: false
     }
   };
-
-  // On Windows, set type:'toolbar' which sets WS_EX_TOOLWINDOW.
-  // This completely removes the window from the taskbar and Alt+Tab.
-  if (isWindows) {
-    winOptions.type = 'toolbar';
-  }
 
   win = new BrowserWindow(winOptions);
 
@@ -272,12 +273,27 @@ function createWindow() {
 
   win.setTitle('cue');
 
+  win.on('focus', () => {
+    if (isGhostModeActive && keyHookProcess && keyHookProcess.stdin) {
+      try { keyHookProcess.stdin.write('RESTORE_FG\n'); } catch {}
+    }
+  });
+
   win.webContents.on('did-finish-load', () => {
     win.show();
-    win.focus();
     if (typeof win.moveTop === 'function') win.moveTop();
     win.setTitle('cue');
     startMouseTracker();
+    if (keyHookProcess && keyHookProcess.stdin) {
+      keyHookProcess.stdin.write(`PID ${process.pid}\n`);
+      if (win && !win.isDestroyed()) {
+        try {
+          const handleBuf = win.getNativeWindowHandle();
+          const hwndStr = isWindows ? handleBuf.readBigInt64LE(0).toString() : '0';
+          keyHookProcess.stdin.write(`HWND ${hwndStr}\n`);
+        } catch {}
+      }
+    }
     // Warn about missing content protection on old Windows builds
     if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
       send('status', {
@@ -287,6 +303,11 @@ function createWindow() {
   });
   win.webContents.on('will-navigate', (e) => {
     e.preventDefault();
+  });
+  win.webContents.on('before-input-event', (e, input) => {
+    if (input.key === 'F1') {
+      e.preventDefault();
+    }
   });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -464,7 +485,8 @@ async function setCapturing(active) {
     const settings = store.getSettings();
     const sttPref = settings.sttProvider || 'auto';
     const hasCloudKeys = !!(settings.apiKeys?.deepgram || settings.apiKeys?.openai);
-    const useLocal = sttPref === 'local' || (sttPref === 'auto' && !hasCloudKeys && whisperRuntime.isAvailable());
+    const runtime = getWhisperRuntime();
+    const useLocal = sttPref === 'local' || (sttPref === 'auto' && !hasCloudKeys && runtime.available);
 
     if (useLocal) {
       try {
@@ -545,14 +567,18 @@ async function runFeature(mode, userText) {
       return;
     }
 
+    const currentSettings = store.getSettings();
+    const explicitScreenMention = /\b(screen|screenshot|look at|see this|on screen|what('?s| is) on|whats on|display|window|desktop|what do you see|read (the|my))\b/i.test(userText || '');
+    const wantsScreen = def.needsScreen && (mode === 'assist' || currentSettings.screenVision || explicitScreenMention);
+
     let imageDataUrl = null;
-    if (def.needsScreen) {
+    if (wantsScreen) {
       try {
         if (win && WIN_SUPPORTS_CONTENT_PROTECTION) {
           // Exclude cue window from screenshot so the LLM sees ONLY the screen behind/apart from the app
           try { win.setContentProtection(true); } catch {}
         }
-        imageDataUrl = await captureScreenshot();
+        imageDataUrl = await captureScreenshot(win ? win.getBounds() : null);
         if (!imageDataUrl) throw new Error('No screen source was available.');
       }
       catch (e) {
@@ -574,9 +600,10 @@ async function runFeature(mode, userText) {
     if (sessionId !== activeStreamSessionId) return;
 
     const settingsForPrompt = store.getSettings();
-    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript);
-    const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
-    const built = def.build({ transcript, userText: userText || '' });
+    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript, userText);
+    const extraOpts = { hasScreen: !!imageDataUrl };
+    const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '', extraOpts) : (def.system || '');
+    const built = def.build({ transcript, userText: userText || '' }, extraOpts);
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever
     let watchdog = null;
@@ -751,35 +778,250 @@ function startMouseTracker() {
     }
   }, 35);
 }
-ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => { }); });
+ipcMain.on('open-pane', (_e, url) => {
+  if (url && (url.startsWith('ms-settings:') || url.startsWith('x-apple.'))) {
+    shell.openExternal(url).catch(() => { });
+  }
+});
 ipcMain.on('app:quit', () => app.quit());
-ipcMain.on('win:focusable', (_e, v) => { if (win) win.setFocusable(!!v); });
+ipcMain.on('input:focused', (_e, focused) => {
+  isInputFocused = !!focused;
+  if (win && !win.isDestroyed()) {
+    win.setFocusable(false);
+  }
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try {
+      keyHookProcess.stdin.write(focused || isGhostModeActive ? 'ACTIVE 1\n' : 'ACTIVE 0\n');
+      if (!focused && !isGhostModeActive) {
+        keyHookProcess.stdin.write('RESTORE_FG\n');
+      }
+    } catch {}
+  }
+});
+ipcMain.on('win:restore-fg', () => {
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try { keyHookProcess.stdin.write('RESTORE_FG\n'); } catch {}
+  }
+});
+ipcMain.on('window:drag-start', () => {
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try { keyHookProcess.stdin.write('DRAG_START\n'); } catch {}
+  }
+});
+
+ipcMain.on('window:drag-stop', () => {
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try { keyHookProcess.stdin.write('DRAG_STOP\n'); } catch {}
+  }
+});
+
+ipcMain.on('window:move-to', (_e, data) => {
+  if (win && !win.isDestroyed() && data) {
+    const x = Number(data.x);
+    const y = Number(data.y);
+    if (!isNaN(x) && !isNaN(y)) {
+      win.setPosition(Math.round(x), Math.round(y));
+    }
+  }
+});
+ipcMain.on('window:move-by', (_e, data) => {
+  if (win && !win.isDestroyed() && data) {
+    const dx = Number(data.dx) || 0;
+    const dy = Number(data.dy) || 0;
+    if (dx !== 0 || dy !== 0) {
+      const [x, y] = win.getPosition();
+      win.setPosition(Math.round(x + dx), Math.round(y + dy));
+    }
+  }
+});
+ipcMain.on('win:focusable', (_e, v) => {
+  const focusable = !!v;
+  if (win && !win.isDestroyed()) {
+    try {
+      win.setFocusable(focusable);
+      if (focusable) {
+        win.focus();
+      }
+    } catch {}
+  }
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try {
+      keyHookProcess.stdin.write(focusable ? 'ALLOW_FOCUS 1\n' : 'ALLOW_FOCUS 0\n');
+    } catch {}
+  }
+});
 ipcMain.on('win:stealth', (_e, v) => { if (win) win.setContentProtection(!!v); });
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
+ipcMain.handle('clipboard:read', () => clipboard.readText());
+ipcMain.on('clipboard:write', (_e, text) => clipboard.writeText(String(text || '')));
+
+// -------- non-focused global typing hook (Windows) --------
+let keyHookProcess = null;
+
+function startKeyHook() {
+  if (process.platform !== 'win32') return;
+  const hookExe = path.join(__dirname, 'scripts', 'key-hook.exe');
+  if (!fs.existsSync(hookExe)) return;
+
+  try {
+    keyHookProcess = spawn(hookExe, [], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      windowsHide: true
+    });
+
+    let buffer = '';
+    keyHookProcess.stdout.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (let rawLine of lines) {
+        const line = rawLine.replace(/[\r\n]/g, '');
+        if (!line) continue;
+        if (line === 'READY') {
+          if (keyHookProcess && keyHookProcess.stdin) {
+            keyHookProcess.stdin.write(`PID ${process.pid}\n`);
+            if (win && !win.isDestroyed()) {
+              try {
+                const handleBuf = win.getNativeWindowHandle();
+                const hwndStr = isWindows ? handleBuf.readBigInt64LE(0).toString() : '0';
+                keyHookProcess.stdin.write(`HWND ${hwndStr}\n`);
+              } catch {}
+            }
+          }
+          continue;
+        }
+        if (line === 'EVENT:SPACE') {
+          send('keyhook:char', ' ');
+        } else if (line.startsWith('CHAR:')) {
+          send('keyhook:char', line.substring(5));
+        } else if (line === 'EVENT:BACKSPACE') {
+          send('keyhook:backspace', {});
+        } else if (line === 'EVENT:DELETE') {
+          send('keyhook:delete', {});
+        } else if (line === 'EVENT:ARROW_LEFT') {
+          send('keyhook:arrow-left', {});
+        } else if (line === 'EVENT:ARROW_RIGHT') {
+          send('keyhook:arrow-right', {});
+        } else if (line === 'EVENT:HOME') {
+          send('keyhook:home', {});
+        } else if (line === 'EVENT:END') {
+          send('keyhook:end', {});
+        } else if (line === 'EVENT:SUBMIT') {
+          send('keyhook:submit', {});
+        } else if (line === 'EVENT:CANCEL' || line === 'EVENT:PAUSE') {
+          send('keyhook:pause', {});
+        } else if (line === 'EVENT:NEWLINE') {
+          send('keyhook:newline', {});
+        } else if (line === 'EVENT:PASTE') {
+          send('keyhook:paste', {});
+        } else if (line === 'EVENT:SELECT_ALL') {
+          send('keyhook:select-all', {});
+        } else if (line === 'EVENT:COPY') {
+          send('keyhook:copy', {});
+        } else if (line === 'EVENT:CUT') {
+          send('keyhook:cut', {});
+        } else if (line === 'EVENT:UNDO') {
+          send('keyhook:undo', {});
+        } else if (line === 'EVENT:REDO') {
+          send('keyhook:redo', {});
+        } else if (line === 'EVENT:WORD_BACKSPACE') {
+          send('keyhook:word-backspace', {});
+        } else if (line === 'EVENT:WORD_DELETE') {
+          send('keyhook:word-delete', {});
+        } else if (line === 'EVENT:WORD_LEFT') {
+          send('keyhook:word-left', {});
+        } else if (line === 'EVENT:WORD_RIGHT') {
+          send('keyhook:word-right', {});
+        } else if (line === 'EVENT:SELECT_LEFT') {
+          send('keyhook:select-left', {});
+        } else if (line === 'EVENT:SELECT_RIGHT') {
+          send('keyhook:select-right', {});
+        } else if (line === 'EVENT:SELECT_HOME') {
+          send('keyhook:select-home', {});
+        } else if (line === 'EVENT:SELECT_END') {
+          send('keyhook:select-end', {});
+        }
+      }
+    });
+
+    keyHookProcess.on('exit', () => {
+      keyHookProcess = null;
+    });
+  } catch (err) {
+    console.log('[keyhook] spawn error:', err.message);
+  }
+}
+
+function setKeyHookActive(active) {
+  isGhostModeActive = !!active;
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try {
+      keyHookProcess.stdin.write(active ? 'ACTIVE 1\n' : 'ACTIVE 0\n');
+    } catch {}
+  }
+}
+
+function stopKeyHook() {
+  if (keyHookProcess) {
+    try {
+      keyHookProcess.stdin.write('EXIT\n');
+      keyHookProcess.kill();
+    } catch {}
+    keyHookProcess = null;
+  }
+}
+
+ipcMain.on('keyhook:active', (_e, active) => {
+  isGhostModeActive = !!active;
+  setKeyHookActive(!!active);
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try {
+      keyHookProcess.stdin.write(active ? 'ACTIVE 1\n' : 'ACTIVE 0\n');
+      keyHookProcess.stdin.write('RESTORE_FG\n');
+    } catch {}
+  }
+});
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
 // The parsed text is RETURNED to the renderer, which drops it into the existing
 // #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
   const wasAlwaysOnTop = win ? win.isAlwaysOnTop() : false;
+  if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+    try { keyHookProcess.stdin.write('INPUT_FOCUSED 1\n'); } catch {}
+  }
   try {
-    if (win && wasAlwaysOnTop) win.setAlwaysOnTop(false);
-    const res = await dialog.showOpenDialog(win, {
+    if (win) {
+      if (wasAlwaysOnTop) win.setAlwaysOnTop(false);
+      try { win.setFocusable(true); } catch {}
+    }
+    const res = await dialog.showOpenDialog({
       title: 'Select Resume or Job Description (PDF or DOCX)',
       properties: ['openFile', 'dontAddToRecent'],
       filters: [{ name: 'Documents (*.pdf, *.docx)', extensions: ['pdf', 'docx'] }]
     });
     if (res.canceled || !res.filePaths.length) return null;
     const filePath = res.filePaths[0];
-    const text = await parseDocumentFile(filePath);
+    const settings = store.getSettings();
+    const text = await parseDocumentFile(filePath, { settings });
     return { fileName: path.basename(filePath), text };
   } finally {
-    if (win && wasAlwaysOnTop) {
-      if (isMac) {
-        win.setAlwaysOnTop(true, 'screen-saver', 1);
-      } else {
-        win.setAlwaysOnTop(true, 'pop-up-menu');
+    if (win) {
+      try { win.setFocusable(false); } catch {}
+      if (wasAlwaysOnTop) {
+        if (isMac) {
+          win.setAlwaysOnTop(true, 'screen-saver', 1);
+        } else {
+          win.setAlwaysOnTop(true, 'pop-up-menu');
+        }
       }
+    }
+    if (keyHookProcess && keyHookProcess.stdin && !keyHookProcess.killed) {
+      try {
+        keyHookProcess.stdin.write('INPUT_FOCUSED 0\n');
+        keyHookProcess.stdin.write('RESTORE_FG\n');
+      } catch {}
     }
   }
 }
@@ -818,13 +1060,13 @@ function registerShortcuts() {
     say: () => runFeature('say', ''),
     leetcode: () => runFeature('leetcode', ''),
     hide: () => send('hide:toggle', {}),
+    type: () => send('keyhook:toggle', {}),
     boss: () => {
       if (!win || win.isDestroyed()) return;
       if (win.isVisible()) {
         win.hide();
       } else {
         win.show();
-        win.focus();
       }
     },
     quit: () => app.quit()
@@ -918,7 +1160,7 @@ function createPermissionsWindow() {
     transparent: true,
     hasShadow: true,
     resizable: false,
-    skipTaskbar: false,
+    skipTaskbar: true,
     fullscreenable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -974,6 +1216,7 @@ function launchApp() {
   });
 
   createWindow();
+  startKeyHook();
   registerShortcuts();
 }
 
@@ -1000,6 +1243,7 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  stopKeyHook();
   // Best effort, deliberately not blocking the quit: the library also removes
   // the instance file from a `process.on('exit')` handler, and a file left
   // behind is harmless anyway because readers check whether the PID is alive.

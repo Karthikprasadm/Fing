@@ -52,10 +52,13 @@
               <div id="input-area">
                 <div id="placeholder">Ask about your screen or conversation, or <span class="keycap">⌘</span><span class="keycap">⏎</span> for Assist</div>
                 <textarea id="input" rows="1" spellcheck="false"></textarea>
+                <div id="input-display" class="input-display"><span id="typed-before"></span><span id="typed-selection" class="typed-selection"></span><span id="typing-caret" class="typing-caret hidden"></span><span id="typed-after"></span></div>
               </div>
               <div id="composer-bottom">
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
-                <button id="history-btn" class="history-btn" title="Conversation History"><span class="ic"></span><span class="history-badge hidden"></span></button>
+                <button id="ghost-toggle" class="smart-pill ghost-pill"><span class="ic"></span><span>Ghost</span></button>
+                <button id="screen-toggle" class="smart-pill screen-pill"><span class="ic"></span><span>Screen</span></button>
+                <button id="history-btn" class="history-btn"><span class="ic"></span><span class="history-badge hidden"></span></button>
                 <button id="more-btn" class="more-btn"></button>
                 <div class="spacer"></div>
                 <button id="send-btn"></button>
@@ -77,14 +80,37 @@
     <!-- Transcript history sidebar — floats OUTSIDE main panel, toggled by history button -->
     <div id="transcript-sidebar" class="transcript-sidebar hidden">
       <div class="ts-header">
-        <span class="ts-title">Conversation History</span>
-        <button class="ts-close-btn" id="close-sidebar-btn">✕</button>
+        <div class="ts-tabs">
+          <button class="ts-tab on" id="ts-tab-history" data-tab="history">
+            <span>Questions</span>
+            <span class="ts-badge hidden" id="ts-badge-history">0</span>
+          </button>
+          <button class="ts-tab" id="ts-tab-transcript" data-tab="transcript">
+            <span>Live Audio</span>
+            <span class="ts-badge hidden" id="ts-badge-transcript">0</span>
+          </button>
+        </div>
+        <button class="ts-close-btn" id="close-sidebar-btn" title="Close sidebar">✕</button>
       </div>
-      <div id="ts-list" class="ts-list">
-        <div class="ts-placeholder">Conversation history will appear here when listening.</div>
+
+      <!-- View 1: Question History -->
+      <div id="ts-history-view" class="ts-view">
+        <div id="ts-history-list" class="ts-list">
+          <div class="ts-placeholder">No question history yet.</div>
+        </div>
+        <div class="ts-footer">
+          <button class="ts-clear-btn" id="clear-history-btn">Clear Questions</button>
+        </div>
       </div>
-      <div class="ts-footer">
-        <button class="ts-clear-btn" id="clear-transcript-btn">Clear History</button>
+
+      <!-- View 2: Live Audio Transcript -->
+      <div id="ts-transcript-view" class="ts-view hidden">
+        <div id="ts-list" class="ts-list">
+          <div class="ts-placeholder">Live transcript will appear here when listening.</div>
+        </div>
+        <div class="ts-footer">
+          <button class="ts-clear-btn" id="clear-transcript-btn">Clear Transcript</button>
+        </div>
       </div>
     </div>
   </div>
@@ -306,6 +332,12 @@
 
         <div class="s-field"><span>LeetCode Mode</span><input id="shortcut-leetcode" type="text" placeholder="e.g. CommandOrControl+H, F9" spellcheck="false" autocomplete="off" /></div>
         <div class="s-note">Solves technical coding questions with approach and complexity.</div>
+
+        <div class="s-field"><span>Hide Overlay</span><input id="shortcut-hide" type="text" placeholder="e.g. CommandOrControl+Shift+/, Ctrl+Shift+/" spellcheck="false" autocomplete="off" /></div>
+        <div class="s-note">Toggles overlay collapse / expanded view.</div>
+
+        <div class="s-field"><span>Ghost Typing</span><input id="shortcut-type" type="text" placeholder="e.g. CommandOrControl+Shift+K, Ctrl+Shift+K" spellcheck="false" autocomplete="off" /></div>
+        <div class="s-note">Toggles stealth keyboard capture for typing into cue from background.</div>
 
         <div class="s-field"><span>Boss Key</span><input id="shortcut-boss" type="text" placeholder="e.g. CommandOrControl+Shift+Z, Ctrl+Shift+B" spellcheck="false" autocomplete="off" /></div>
         <div class="s-note">Instantly toggles cue window visibility and brings to front.</div>

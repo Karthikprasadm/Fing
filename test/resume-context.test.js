@@ -123,3 +123,30 @@ test('buildInterviewContext: JD tailor note included when JD is set', () => {
   assert.ok(ctx !== null);
   assert.ok(ctx.includes('Tailor'), 'should include tailor note when JD is set');
 });
+
+test('parseResume detects markdown headings and internships', () => {
+  const mdResume = '# John Doe\n\n## Internships\nWorked at Acme 2024\n\n## Projects\nBuilt CoolApp\n\n## Skills\nPython, React\n\n## Education\nState University 2025';
+  const parsed = parseResume(mdResume);
+  assert.ok(parsed.parsed);
+  assert.equal(parsed.sections.name, 'John Doe');
+  assert.ok(parsed.sections.experience.includes('Acme'));
+  assert.ok(parsed.sections.projects.includes('CoolApp'));
+  assert.ok(parsed.sections.skills.includes('Python'));
+  assert.ok(parsed.sections.education.includes('State University'));
+});
+
+test('extractJpegImages finds JPEG markers in a buffer', () => {
+  const { extractJpegImages } = require('../src/resume');
+  const dummy = Buffer.concat([
+    Buffer.from('prefix'),
+    Buffer.from([0xFF, 0xD8, 0xFF, 0x01, 0x02, 0xFF, 0xD9]),
+    Buffer.from('middle'),
+    Buffer.from([0xFF, 0xD8, 0xFF, 0x03, 0x04, 0xFF, 0xD9]),
+    Buffer.from('suffix')
+  ]);
+  const found = extractJpegImages(dummy);
+  assert.equal(found.length, 2);
+  assert.equal(found[0].length, 7);
+  assert.equal(found[1].length, 7);
+});
+

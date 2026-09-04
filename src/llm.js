@@ -21,6 +21,11 @@ const DEFAULT_MODELS = {
   openrouter: 'openrouter/free'
 };
 
+const GROQ_VISION_MODELS = {
+  fast: 'llama-3.2-11b-vision-preview',
+  smart: 'llama-3.2-90b-vision-preview'
+};
+
 // Gemini model ids that Google has since deprecated/retired. A settings file
 // saved before this fix can still have one of these persisted on disk, so
 // createLLM migrates them at read time rather than only fixing the default —
@@ -71,6 +76,13 @@ function formatRetryWait(seconds) {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
+function isImageNotSupportedError(error) {
+  const rawMessage = (error && (error.message || String(error))) || '';
+  return /image_url is not supported/i.test(rawMessage) ||
+    /does not support image/i.test(rawMessage) ||
+    /model.*does not support vision/i.test(rawMessage);
+}
+
 function formatProviderErrorMessage(error, provider, model) {
   const label = normalizeProviderName(provider);
   const rawMessage = (error && (error.message || String(error))) || '';
@@ -84,6 +96,11 @@ function formatProviderErrorMessage(error, provider, model) {
   if (isNotFoundError(error)) {
     const modelHint = model ? ` "${model}"` : '';
     return `${label} model${modelHint} is unavailable (404) — it may have been renamed, retired by the provider, or misspelled. Open Settings and pick a current model for ${label} (or clear the field to use cue's default), then try again.`;
+  }
+
+  if (isImageNotSupportedError(error)) {
+    const modelHint = model ? ` "${model}"` : '';
+    return `${label} model${modelHint} does not support image or screen analysis. Switch to a vision-capable model in Settings (such as llama-3.2-11b-vision-preview for Groq) or select another provider.`;
   }
 
   return rawMessage || 'Unknown LLM error.';
@@ -106,7 +123,7 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, provider }) {
   const OpenAI = require('openai');
   const opts = { apiKey };
   if (baseURL) opts.baseURL = baseURL;
@@ -131,7 +148,19 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
       messages.push({ role: t.role, content: t.text });
     }
   });
-  const stream = await client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens });
+  let activeModel = model;
+  if (baseURL && baseURL.includes('openrouter.ai') && imageDataUrl) {
+    if (!activeModel || activeModel === 'openrouter/free' || activeModel === 'openrouter/auto') {
+      activeModel = 'minimax/minimax-m3:free';
+    }
+  }
+  if ((provider === 'groq' || (baseURL && baseURL.includes('api.groq.com'))) && imageDataUrl) {
+    if (!activeModel || (!activeModel.includes('vision') && !activeModel.includes('llava'))) {
+      const isSmart = activeModel && (activeModel.includes('70b') || activeModel.includes('90b') || activeModel.includes('versatile'));
+      activeModel = isSmart ? GROQ_VISION_MODELS.smart : GROQ_VISION_MODELS.fast;
+    }
+  }
+  const stream = await client.chat.completions.create({ model: activeModel, messages, stream: true, max_tokens: maxTokens });
   let full = '';
   for await (const part of stream) {
     const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
@@ -347,7 +376,7 @@ function createLLM(settings) {
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
+      const args = { apiKey, baseURL, endpoint, model, maxTokens, provider, ...params, turns: sanitizeTurns(params.turns) };
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
@@ -366,4 +395,4 @@ function createLLM(settings) {
   };
 }
 
-module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT };
+module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT, GROQ_VISION_MODELS };

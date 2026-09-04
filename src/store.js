@@ -19,6 +19,7 @@ const DEFAULTS = {
     threads: 0
   },
   smart: false,
+  screenVision: false,
   audio: {
     micDeviceId: 'default',
     echoGate: 'balanced', // 'off' | 'gentle' | 'balanced' | 'aggressive'
@@ -30,6 +31,7 @@ const DEFAULTS = {
     leetcode: 'CommandOrControl+H',
     boss: 'CommandOrControl+Shift+Z',
     hide: 'CommandOrControl+Shift+/',
+    type: 'CommandOrControl+Shift+K',
     quit: 'CommandOrControl+Shift+X'
   },
   baseUrl: '',
@@ -39,7 +41,9 @@ const DEFAULTS = {
   azureEndpoint: '',
   // Tab 2: Profile
   resumeText: '',
+  resumeFileName: '',
   jobDescription: '',
+  jdFileName: '',
   // Tab 3: Interview Prep
   starStories: '',       // 3-5 behavioral STAR stories in plain English
   whyCompany: '',        // Why do you want to work here?

@@ -26,7 +26,7 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
   return originalModuleLoad.call(this, request, parent, isMain);
 };
 
-const { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT } = require('../src/llm');
+const { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT, GROQ_VISION_MODELS } = require('../src/llm');
 
 test.after(() => {
   Module._load = originalModuleLoad;
@@ -280,4 +280,85 @@ test('createLLM: leaves a user-chosen current Gemini model alone', () => {
     models: { gemini: { fast: 'gemini-3.5-flash', smart: 'gemini-3.5-flash' } }
   }));
   assert.equal(llm.model, 'gemini-3.5-flash');
+});
+
+// ---- Groq vision model fallback --------------------------------------------
+
+function groqSettings(overrides = {}) {
+  return {
+    provider: 'groq',
+    smart: false,
+    apiKeys: { groq: 'gsk_test_key' },
+    models: { groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' } },
+    ...overrides
+  };
+}
+
+test('groq: text-only request preserves fast text model (llama-3.1-8b-instant)', async () => {
+  const llm = createLLM(groqSettings({ smart: false }));
+  await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hello' }], onToken: () => {} });
+
+  assert.equal(capturedClientOptions.baseURL, 'https://api.groq.com/openai/v1');
+  assert.equal(capturedCompletionRequest.model, 'llama-3.1-8b-instant');
+});
+
+test('groq: text-only request preserves smart text model (llama-3.3-70b-versatile)', async () => {
+  const llm = createLLM(groqSettings({ smart: true }));
+  await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hello' }], onToken: () => {} });
+
+  assert.equal(capturedCompletionRequest.model, 'llama-3.3-70b-versatile');
+});
+
+test('groq: request with imageDataUrl automatically falls back to llama-3.2-11b-vision-preview for fast tier', async () => {
+  const llm = createLLM(groqSettings({ smart: false }));
+  await llm.stream({
+    system: 's',
+    turns: [{ role: 'user', text: 'inspect screen' }],
+    imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    onToken: () => {}
+  });
+
+  assert.equal(capturedCompletionRequest.model, GROQ_VISION_MODELS.fast);
+  assert.equal(capturedCompletionRequest.model, 'llama-3.2-11b-vision-preview');
+  // Check image_url structure is intact
+  const userMsg = capturedCompletionRequest.messages.find(m => m.role === 'user');
+  assert.ok(Array.isArray(userMsg.content), 'user content should be multipart array');
+  assert.equal(userMsg.content[1].type, 'image_url');
+});
+
+test('groq: request with imageDataUrl automatically falls back to llama-3.2-90b-vision-preview for smart tier', async () => {
+  const llm = createLLM(groqSettings({ smart: true }));
+  await llm.stream({
+    system: 's',
+    turns: [{ role: 'user', text: 'solve code on screen' }],
+    imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    onToken: () => {}
+  });
+
+  assert.equal(capturedCompletionRequest.model, GROQ_VISION_MODELS.smart);
+  assert.equal(capturedCompletionRequest.model, 'llama-3.2-90b-vision-preview');
+});
+
+test('groq: request with imageDataUrl preserves explicitly configured vision model', async () => {
+  const llm = createLLM(groqSettings({
+    models: { groq: { fast: 'llama-3.2-11b-vision-preview', smart: 'llama-3.2-90b-vision-preview' } },
+    smart: false
+  }));
+  await llm.stream({
+    system: 's',
+    turns: [{ role: 'user', text: 'look' }],
+    imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    onToken: () => {}
+  });
+
+  assert.equal(capturedCompletionRequest.model, 'llama-3.2-11b-vision-preview');
+});
+
+test('formatProviderErrorMessage: maps image_url not supported error to actionable message', () => {
+  const error = new Error('400: image_url is not supported for model llama-3.1-8b-instant');
+  const message = formatProviderErrorMessage(error, 'groq', 'llama-3.1-8b-instant');
+
+  assert.match(message, /Groq/);
+  assert.match(message, /does not support image or screen analysis/);
+  assert.match(message, /llama-3\.2-11b-vision-preview/);
 });

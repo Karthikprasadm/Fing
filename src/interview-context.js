@@ -47,6 +47,7 @@ const CATEGORY_PATTERNS = {
     /walk me through (your|the) (role|position|work|project)/i,
     /what (were you responsible|did you do|was your role)/i,
     /biggest (project|achievement) (at|there|in your)/i,
+    /project/i, /projects/i, /portfolio/i,
     /tech stack/i, /day.to.day/i, /what did you build/i,
     /tell me more about/i, /elaborate on/i,
     /tell me about yourself/i,
@@ -82,18 +83,23 @@ const CATEGORY_PATTERNS = {
   ],
 };
 
-function detectCategory(transcript) {
-  if (!transcript || !transcript.length) return 'general';
-  // Look at the last 5 "Them" turns — the interviewer's recent questions
-  const recentThem = transcript
-    .filter(t => t.channel === 'them')
-    .slice(-5)
-    .map(t => t.text)
-    .join(' ');
-  if (!recentThem) return 'general';
+function detectCategory(transcript, userText) {
+  let searchText = '';
+  if (transcript && transcript.length) {
+    const recentThem = transcript
+      .filter(t => t.channel === 'them')
+      .slice(-5)
+      .map(t => t.text)
+      .join(' ');
+    if (recentThem) searchText = recentThem;
+  }
+  if (userText && typeof userText === 'string') {
+    searchText = (searchText ? searchText + ' ' : '') + userText;
+  }
+  if (!searchText) return 'general';
 
   for (const [category, patterns] of Object.entries(CATEGORY_PATTERNS)) {
-    if (patterns.some(re => re.test(recentThem))) return category;
+    if (patterns.some(re => re.test(searchText))) return category;
   }
   return 'general';
 }
@@ -101,19 +107,19 @@ function detectCategory(transcript) {
 // ── Resume parser (carried over from resume-context.js) ───────────────────────
 const SECTION_PATTERNS = [
   { key: 'name',       re: null, label: null },
-  { key: 'summary',    re: /(?:summary|objective|profile|about)[^\n]*\n([\s\S]{20,400}?)(?=\n[A-Z]|\n\n[A-Z]|$)/i,      label: 'Summary' },
-  { key: 'experience', re: /(?:experience|work history|employment)[^\n]*\n([\s\S]{20,1800}?)(?=\n(?:education|skills|projects|certif|awards|$))/i, label: 'Experience' },
-  { key: 'skills',     re: /(?:skills?|technical skills?|competencies|tech stack)[^\n]*\n([\s\S]{10,600}?)(?=\n(?:experience|education|projects|certif|awards|work|$))/i, label: 'Skills' },
-  { key: 'education',  re: /(?:education|academic)[^\n]*\n([\s\S]{10,400}?)(?=\n(?:experience|skills|projects|certif|awards|work|$))/i, label: 'Education' },
-  { key: 'projects',   re: /(?:projects?|portfolio)[^\n]*\n([\s\S]{10,800}?)(?=\n(?:experience|education|skills|certif|awards|work|$))/i, label: 'Projects' },
+  { key: 'summary',    re: /(?:^|\n)[#*\s]*(?:summary|objective|profile|about)[^\n]*\n([\s\S]{20,800}?)(?=(?:\n+[#*\s]*[A-Z])|\s*$)/i,      label: 'Summary' },
+  { key: 'experience', re: /(?:^|\n)[#*\s]*(?:experience|work history|employment|internships?)[^\n]*\n([\s\S]{20,3500}?)(?=(?:\n+[#*\s]*(?:education|skills|projects|certif|awards|position))|\s*$)/i, label: 'Experience' },
+  { key: 'projects',   re: /(?:^|\n)[#*\s]*(?:projects?|portfolio|personal projects?|key projects?)[^\n]*\n([\s\S]{10,3500}?)(?=(?:\n+[#*\s]*(?:experience|internships?|education|skills|certif|awards|work|position))|\s*$)/i, label: 'Projects' },
+  { key: 'skills',     re: /(?:^|\n)[#*\s]*(?:skills?|technical skills?|competencies|tech stack)[^\n]*\n([\s\S]{10,2000}?)(?=(?:\n+[#*\s]*(?:experience|internships?|education|projects|certif|awards|work|position))|\s*$)/i, label: 'Skills' },
+  { key: 'education',  re: /(?:^|\n)[#*\s]*(?:education|academic)[^\n]*\n([\s\S]{10,1200}?)(?=(?:\n+[#*\s]*(?:experience|internships?|skills|projects|certif|awards|work|position))|\s*$)/i, label: 'Education' },
 ];
 
 function parseResume(text) {
   if (!text || !text.trim()) return null;
   const clean = text.trim();
   const sections = {};
-  const firstLine = clean.split('\n').find(l => l.trim().length > 1 && l.trim().length < 80);
-  if (firstLine) sections.name = firstLine.trim();
+  const firstLine = clean.split('\n').find(l => l.replace(/^[#*\s]+/, '').trim().length > 1 && l.replace(/^[#*\s]+/, '').trim().length < 80);
+  if (firstLine) sections.name = firstLine.replace(/^[#*\s]+/, '').trim();
   for (const { key, re } of SECTION_PATTERNS) {
     if (!re) continue;
     const m = re.exec(clean);
@@ -130,30 +136,34 @@ function clip(text, limit) {
 
 // ── Context builders by category ──────────────────────────────────────────────
 
-function buildResumeBlock(resumeText, limit = 2400) {
+function buildResumeBlock(resumeText, limit = 8000) {
   if (!resumeText || !resumeText.trim()) return '';
   const parsed = parseResume(resumeText);
   if (!parsed) return '';
   if (parsed.parsed) {
     const parts = [];
     let rem = limit;
-    const order = ['name', 'summary', 'experience', 'skills', 'projects', 'education'];
+    const order = ['name', 'summary', 'experience', 'projects', 'skills', 'education'];
     for (const key of order) {
       if (rem <= 0) break;
       const val = parsed.sections[key];
       if (!val) continue;
       const sp = SECTION_PATTERNS.find(s => s.key === key);
       const label = sp && sp.label;
-      const chunk = label ? `${label}:\n${clip(val, Math.min(rem - label.length - 2, 800))}` : clip(val, 80);
+      const chunk = label ? `${label}:\n${clip(val, Math.min(rem - label.length - 2, 3500))}` : clip(val, 150);
       parts.push(chunk);
       rem -= chunk.length;
     }
-    return parts.join('\n\n');
+    const combined = parts.join('\n\n');
+    if (combined.length < Math.min(parsed.raw.length * 0.5, limit)) {
+      return clip(parsed.raw, limit);
+    }
+    return combined;
   }
   return clip(parsed.raw, limit);
 }
 
-function buildJDBlock(jd, limit = 600) {
+function buildJDBlock(jd, limit = 1000) {
   if (!jd || !jd.trim()) return '';
   return 'Target Role / Job Description:\n' + clip(jd.trim().replace(/\s+/g, ' '), limit);
 }
@@ -161,15 +171,15 @@ function buildJDBlock(jd, limit = 600) {
 // ── Main export ───────────────────────────────────────────────────────────────
 
 /**
- * buildInterviewContext(settings, mode, transcript)
+ * buildInterviewContext(settings, mode, transcript, userText)
  * Returns a system-prompt string with only the context fields relevant to
  * the detected interview category. Returns null for leetcode mode.
  */
-function buildInterviewContext(settings, mode, transcript) {
+function buildInterviewContext(settings, mode, transcript, userText) {
   // Coding problems never need personal context
   if (mode === 'leetcode') return null;
 
-  const category = detectCategory(transcript || []);
+  const category = detectCategory(transcript || [], userText);
 
   const resume    = settings.resumeText || '';
   const jd        = settings.jobDescription || '';
@@ -186,16 +196,22 @@ function buildInterviewContext(settings, mode, transcript) {
 
   const blocks = [];
 
-  // Always include resume if available (but size varies by category)
+  // Always include resume if available
   if (hasResume) {
-    const resumeLimit = (category === 'behavioral' || category === 'experience') ? 2400 : 1400;
+    const resumeLimit = (category === 'behavioral' || category === 'experience') ? 8000 : 6000;
     const rb = buildResumeBlock(resume, resumeLimit);
-    if (rb) blocks.push('=== Your Background ===\n' + rb);
+    if (rb) {
+      blocks.push(
+        '=== Candidate Background & Resume ===\n' +
+        'IMPORTANT: Ground all answers about experience, past roles, projects, technical skills, and achievements directly in the candidate\'s resume details below. Speak in first person as the candidate:\n\n' +
+        rb
+      );
+    }
   }
 
   // Job description — always include when available
   if (hasJD) {
-    blocks.push(buildJDBlock(jd, category === 'technical' ? 300 : 600));
+    blocks.push(buildJDBlock(jd, category === 'technical' ? 500 : 1000));
   }
 
   // Category-specific injections

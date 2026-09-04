@@ -98,10 +98,11 @@ test('asks separately, and differently, for control', () => {
 test('answers Iris over the link', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cue-applink-'));
   const pathOptions = { homedir: home, env: { ...process.env, LOCALAPPDATA: path.join(home, 'Local') } };
+  const appId = `com.cue.overlay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
   let asked = 0;
   const link = new AppLinkServer({
-    appId: 'com.cue.overlay',
+    appId,
     appSlug: 'cue',
     appName: 'cue',
     appVersion: '0.2.1',
@@ -110,15 +111,15 @@ test('answers Iris over the link', async (t) => {
     onConsentRequest: () => { asked += 1; return true; },
   });
   await link.start();
-  t.after(() => link.stop());
+  t.after(async () => { await link.stop(); });
 
   link.record({ level: 'error', event: 'stt_rejected', code: 'http_403', msg: 'no access to a speech model', frame: 'handleSttError' });
 
-  const found = AppLinkClient.discover(pathOptions).find((entry) => entry.appId === 'com.cue.overlay');
+  const found = AppLinkClient.discover(pathOptions).find((entry) => entry.appId === appId);
   assert.ok(found, 'cue did not announce itself');
 
   const client = await AppLinkClient.open(found, { client: { id: 'com.publikhq.iris', name: 'Iris' }, scopes: ['read'] });
-  t.after(() => client.close());
+  t.after(async () => { await client.close(); });
 
   assert.equal(asked, 1);
 
